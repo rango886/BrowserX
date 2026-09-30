@@ -1,11 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "bx bridge",
+  "name": "BrowserX",
   "version": "0.1.0",
-  "description": "让 bx（AI 浏览器控制工具）连接到这个浏览器，复用登录状态",
+  "description": "让 BrowserX（bx，AI 浏览器控制工具）连接到这个浏览器，复用登录状态",
   "permissions": ["tabs", "tabGroups", "debugger", "storage", "alarms", "cookies"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js", "type": "module" },
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
   "options_page": "options.html",
-  "action": { "default_title": "bx bridge", "default_popup": "options.html" }
+  "action": {
+    "default_title": "BrowserX",
+    "default_popup": "options.html?popup",
+    "default_icon": { "16": "icons/16.png", "32": "icons/32.png" }
+  }
 }

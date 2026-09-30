@@ -1,10 +1,12 @@
-// bx bridge：把浏览器能力通过 ws 暴露给本机的 bx daemon
+// BrowserX 插件：把浏览器能力通过 ws 暴露给本机的 bx daemon
 // - 浏览器级：tabs / tabGroups / windows
 // - 页面级：chrome.debugger 转发 CDP（按需 attach）
 
 const DEFAULTS = { port: 9777, name: '' }
 let ws = null
 let connecting = false
+let connectedAt = 0
+let lastError = ''
 const attached = new Set()
 
 async function getSettings() {
@@ -27,6 +29,8 @@ async function connect() {
     const sock = new WebSocket(`ws://127.0.0.1:${port}/ext`)
     ws = sock // 立刻记下，防止重复连接
     sock.onopen = () => {
+      connectedAt = Date.now()
+      lastError = ''
       const ua = navigator.userAgent
       sock.send(JSON.stringify({ type: 'hello', name, userAgent: ua, extensionId: chrome.runtime.id }))
       setBadge('on')
@@ -34,6 +38,9 @@ async function connect() {
     sock.onmessage = e => onMessage(JSON.parse(e.data))
     sock.onclose = () => {
       if (ws === sock) ws = null
+      if (connectedAt) lastError = '连接断开'
+      else lastError = `连不上 127.0.0.1:${port}`
+      connectedAt = 0
       setBadge('')
       setTimeout(connect, 3000)
     }
@@ -60,6 +67,30 @@ chrome.runtime.onStartup.addListener(connect)
 chrome.runtime.onInstalled.addListener(connect)
 chrome.storage.onChanged.addListener(() => {
   ws?.close()
+  setTimeout(connect, 200) // 改了设置马上重连，不用等 3 秒
+})
+
+// 设置页查询状态
+chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+  if (msg?.type === 'status') {
+    getSettings().then(s =>
+      reply({
+        connected: !!ws && ws.readyState === 1,
+        connectedAt,
+        lastError,
+        name: s.name,
+        port: s.port,
+        attached: attached.size,
+        version: chrome.runtime.getManifest().version,
+      }),
+    )
+    return true
+  }
+  if (msg?.type === 'reconnect') {
+    ws?.close()
+    connect()
+    reply(true)
+  }
 })
 
 // 诊断日志：最近的 debugger 相关事件
