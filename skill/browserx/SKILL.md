@@ -1,11 +1,11 @@
 ---
-name: bx-browser
-description: 用 bx 命令行控制用户的浏览器（复用登录状态）：看标签、打开网页、读页面内容、点击填表、截图、执行 JS、抓接口、拦截请求，运行站点脚本（bili / google / form 等），以及把网站操作录制成脚本。需要上网查东西、操作网页、从网站取数据时使用。
+name: browserx
+description: BrowserX（命令 bx）：用命令行控制用户的浏览器（复用登录状态）：看标签、打开网页、读页面内容、点击填表、截图、执行 JS、抓接口、拦截请求，运行站点脚本（bili / google / form 等），以及把网站操作录制成脚本。需要上网查东西、操作网页、从网站取数据时使用。
 ---
 
-# bx：控制浏览器
+# BrowserX：cli 控制浏览器
 
-命令都是 `bx ...`（没 link 就用 `node <仓库>/bin/bx.js ...`）。后台 daemon 会自动启动。
+命令行工具是 `bx`。命令都是 `bx ...`，后台 daemon 会自动启动。
 所有命令都支持 `-o text|json|yaml|jsonl|csv|table`；需要解析结果时用 `-o json`。
 
 ## 1. 连接浏览器
@@ -115,7 +115,47 @@ bx form fields <url>                   bx form fill <url> --file x.csv --submit 
 ```
 
 - 被程序捕获输出时默认是 JSONL，给人看时加 `-o table` 或 `-o yaml`。
-- 管道：第一个参数写 `-` 就从上一个命令的输出读，比如 `bx bili search 电影 --limit 5 | bx bili video comments - --limit 3`；`--concurrency 3` 并发处理。
+
+### 管道（站点脚本都支持）
+
+站点脚本像 Linux 命令一样可以用 `|` 串起来：前一个命令每行输出一条 JSON，后一个命令逐条读进来，每条执行一次。
+
+- 第一个参数写 `-` 表示从 stdin 读（不写参数、又是被管道喂数据时也会自动读 stdin）。
+- 自动从每条记录里取对应字段：视频类命令取 `bvid / url / aid`，用户类命令取 `mid / owner.mid / url`，`google search` 取 `query / keyword / title`；`bx <站点> <命令> --help` 末尾会写取哪个字段。字段名对不上时用 `--field <字段名>` 指定（支持 `a.b` 这种路径）。
+- stdin 每行可以是 JSON 对象、JSON 数组（会拆开逐条处理），也可以是纯文本（整行就是参数值）。
+- `--concurrency 3` 同时处理 3 条；某条失败只在 stderr 打 `✗`，其余继续，最后退出码是 3。
+- 日志、进度走 stderr，stdout 只有数据，可以放心接 `jq`、重定向到文件。
+
+例子：
+
+```bash
+# 搜索结果 → 每个视频取前 3 条热评
+bx bili search 电影解说 --limit 5 | bx bili video comments - --limit 3
+
+# 排行榜前 10 → 查每个视频的详细信息，存成 CSV
+bx bili rank 知识 --limit 10 | bx bili video info - -o csv > 知识区.csv
+
+# 搜索 → 查详情 → 用 jq 筛出播放量超过 10 万的 → 下载（2 个并发）
+bx bili search 纪录片 --limit 20 \
+  | bx bili video info - \
+  | jq -c 'select(.stat.view > 100000)' \
+  | bx bili video download - --out ./videos --concurrency 2
+
+# 排行榜 → 每个 UP 主的信息（rank 输出里有 mid，user info 自动取 mid）
+bx bili rank 动画 --limit 5 | bx bili user info -
+
+# 某 UP 主最近的投稿 → 每个视频的评论
+bx bili user videos 486906719 --limit 5 | bx bili video comments - --limit 10 -o csv > 评论.csv
+
+# 纯文本输入：一行一个 BV 号
+printf 'BV1GJ411x7h7\nBV1xx411c7mD\n' | bx bili video info -
+
+# 用 --field 明确指定取哪个字段（自动取的不对、或者记录里有多个候选时）：视频详情 → UP 主最近的投稿
+bx bili video info BV1GJ411x7h7 | bx bili user videos - --field owner.mid --limit 5
+
+# 一个文件里放多个关键词，逐个搜
+cat 关键词.txt | bx google search -
+```
 
 ## 7. 把网站操作固化成脚本（没有现成脚本、又要反复做时）
 

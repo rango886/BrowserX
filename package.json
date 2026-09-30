@@ -1,5 +1,5 @@
 {
-  "name": "bx-browser",
+  "name": "browserx",
   "version": "1.0.0",
   "description": "AI-friendly browser control: multi-browser, CLI, scripts, readers",
   "main": "src/sdk/index.ts",

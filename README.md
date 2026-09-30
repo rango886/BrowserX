@@ -1,4 +1,6 @@
-# bx — 给 AI 用的浏览器控制工具
+# BrowserX — 给 AI 用的浏览器控制工具
+
+项目名叫 **BrowserX**，命令行工具是 `bx`。
 
 一句话：让 AI（或者你自己）用命令行控制**你正在用的浏览器**，复用里面的登录状态；常用的活可以写成站点脚本，像 Linux 命令一样用管道串起来。
 
@@ -116,9 +118,36 @@ bx form fill https://example.com/apply --file 表格.csv --map mapping.yaml --su
 
 **管道约定**：
 - 输出到终端时显示表格，被管道接走或被程序调用时输出 JSONL（每行一条 JSON），`-o` 可以强制指定格式。
-- 第一个参数写 `-`，就从 stdin 逐行读记录，自动取出对应字段（比如 `bvid`）。
+- 第一个参数写 `-`，就从 stdin 逐行读记录，自动取出对应字段（比如 `bvid`）。每行可以是 JSON 对象、JSON 数组或纯文本；字段对不上时用 `--field <字段名>`。
+- `--concurrency N` 并发处理；单条失败只在 stderr 报 `✗`，其余继续，退出码 3。
 - 日志和进度走 stderr，不会污染数据。
 - 管道里每一段都是独立进程，但背后是同一个 daemon，浏览器连接和登录状态是共享的。
+
+**管道例子**：
+
+```bash
+# 搜索 → 每个视频取 3 条热评
+bx bili search 电影解说 --limit 5 | bx bili video comments - --limit 3
+
+# 排行榜 → 视频详情 → 存 CSV
+bx bili rank 知识 --limit 10 | bx bili video info - -o csv > 知识区.csv
+
+# 排行榜 → UP 主信息（自动取 mid）
+bx bili rank 动画 --limit 5 | bx bili user info -
+
+# 搜索 → 详情 → jq 筛高播放 → 并发下载
+bx bili search 纪录片 --limit 20 \
+  | bx bili video info - \
+  | jq -c 'select(.stat.view > 100000)' \
+  | bx bili video download - --out ./videos --concurrency 2
+
+# 纯文本输入：一行一个 BV 号 / 一行一个关键词
+printf 'BV1GJ411x7h7\nBV1xx411c7mD\n' | bx bili video info -
+cat 关键词.txt | bx google search -
+
+# 手动指定字段
+bx bili video info BV1GJ411x7h7 | bx bili user videos - --field owner.mid --limit 5
+```
 
 写站点脚本见 [docs/sites.md](docs/sites.md)。
 
@@ -149,6 +178,7 @@ src/sdk/                站点脚本用的 ctx / Tab
 extension/              浏览器插件（MV3）
 sites/                  内置站点脚本：bili、google、form
 readers/                内置 reader：B 站视频页
+skill/browserx/         给 AI agent 用的 skill（SKILL.md）
 test/                   端到端测试（npm test）
 ```
 
