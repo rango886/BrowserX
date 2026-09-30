@@ -1,5 +1,5 @@
 // 生成插件图标：node scripts/make-icons.mjs
-// 渐变圆角方块 + 白色 X，和设置页的 logo 一致。纯 node 实现，不需要依赖。
+// 黑色圆角方块 + 深灰标签栏 + 白色 X，和设置页的 logo 一致。纯 node 实现，不需要依赖。
 import zlib from 'node:zlib'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -8,8 +8,9 @@ import { fileURLToPath } from 'node:url'
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'extension', 'icons')
 fs.mkdirSync(dir, { recursive: true })
 
-const A = [0x3b, 0x6c, 0xf6] // #3b6cf6
-const B = [0x7a, 0x4c, 0xf2] // #7a4cf2
+const BG = [0x16, 0x16, 0x16] // 主体：近黑
+const BAR = [0x3a, 0x3a, 0x3a] // 标签栏：深灰
+const DOT = [0x9a, 0x9a, 0x9a] // 标签栏上的圆点：中灰
 
 function crc32(buf) {
   let c = ~0
@@ -59,15 +60,13 @@ function sample(x, y, small) {
   // 这样看起来是"浏览器窗口"而不是"关闭按钮"
   const bar = small ? 0.3 : 0.28
   if (y < bar) {
-    if (!small) for (const dx of [0.2, 0.31, 0.42]) if (Math.hypot(x - dx, y - 0.155) < 0.042) return [255, 255, 255]
-    const t = (x + y) / 2
-    return A.map((a, i) => (a + (B[i] - a) * t) * 0.62 + 255 * 0.38)
+    if (!small) for (const dx of [0.2, 0.31, 0.42]) if (Math.hypot(x - dx, y - 0.155) < 0.042) return DOT
+    return BAR
   }
   const cyX = (bar + 1) / 2, h = small ? 0.22 : 0.2, w = small ? 0.085 : 0.06
   const onX = segDist(x, y, 0.5 - h, cyX - h, 0.5 + h, cyX + h) < w || segDist(x, y, 0.5 + h, cyX - h, 0.5 - h, cyX + h) < w
   if (onX) return [255, 255, 255]
-  const t = (x + y) / 2
-  return A.map((a, i) => a + (B[i] - a) * t)
+  return BG
 }
 
 for (const size of [16, 32, 48, 128]) {

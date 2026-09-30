@@ -6,127 +6,78 @@
   <title>BrowserX</title>
   <style>
     :root {
-      --bg: #ffffff;
-      --card: #f6f7f9;
-      --border: #e3e6ea;
-      --text: #1d2127;
-      --muted: #6b7380;
-      --accent: #3b6cf6;
-      --accent-2: #7a4cf2;
-      --ok: #22a06b;
-      --warn: #e2a300;
-      --bad: #d9453b;
-      --input: #ffffff;
+      --bg: #fff;
+      --fg: #111;
+      --muted: #888;
+      --line: #e6e6e6;
+      --field: #f5f5f5;
     }
     @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #16181c;
-        --card: #1f2227;
-        --border: #2e3239;
-        --text: #e7e9ec;
-        --muted: #9199a5;
-        --input: #121418;
-      }
+      :root { --bg: #1b1b1b; --fg: #eee; --muted: #8a8a8a; --line: #2e2e2e; --field: #252525; }
     }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; background: var(--bg); color: var(--text); }
+    * { box-sizing: border-box; margin: 0; }
+    html { background: var(--bg); }
     body {
-      font: 13px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei UI", sans-serif;
-      width: 340px;
-      padding: 16px;
+      width: 280px;
+      color: var(--fg);
+      font: 13px/1.4 system-ui, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
     }
-    /* 作为独立设置页打开时居中显示 */
-    body.page { width: auto; max-width: 420px; margin: 40px auto; }
+    body.page { margin: 48px auto; border: 1px solid var(--line); border-radius: 8px; }
 
-    header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-    .logo { width: 34px; height: 34px; flex: none; filter: drop-shadow(0 2px 6px rgb(59 108 246 / 0.35)); }
-    h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: 0.2px; }
-    .sub { color: var(--muted); font-size: 12px; }
-    .ver { margin-left: auto; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .row { display: flex; align-items: center; gap: 8px; padding: 0 14px; min-height: 40px; }
+    .row + .row { border-top: 1px solid var(--line); }
 
-    .status {
-      display: flex; align-items: center; gap: 10px;
-      padding: 10px 12px; border-radius: 10px;
-      background: var(--card); border: 1px solid var(--border);
-    }
-    .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--muted); }
-    .status.ok .dot { background: var(--ok); box-shadow: 0 0 0 4px rgb(34 160 107 / 0.18); }
-    .status.wait .dot { background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
-    .status.bad .dot { background: var(--bad); }
-    @keyframes pulse { 50% { opacity: 0.35; } }
-    .status .title { font-weight: 600; }
-    .status .detail { color: var(--muted); font-size: 12px; }
+    .head { min-height: 44px; border-bottom: 1px solid var(--line); }
+    .brand { font-weight: 600; }
+    .state { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--muted); }
+    .dot { width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid currentColor; }
+    .on .state { color: var(--fg); }
+    .on .dot { background: currentColor; }
 
-    form { margin-top: 14px; display: grid; gap: 12px; }
-    label { display: grid; gap: 4px; }
-    label span { font-weight: 550; }
-    label small { color: var(--muted); font-size: 12px; }
+    label { width: 40px; color: var(--muted); flex: none; }
     input {
-      width: 100%; padding: 7px 10px; font: inherit; color: var(--text);
-      background: var(--input); border: 1px solid var(--border); border-radius: 8px;
-      outline: none; transition: border-color 0.15s, box-shadow 0.15s;
+      flex: 1; min-width: 0; height: 26px; padding: 0 8px;
+      font: inherit; color: var(--fg);
+      background: var(--field); border: 1px solid transparent; border-radius: 5px; outline: none;
     }
-    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(59 108 246 / 0.2); }
+    input:focus { border-color: var(--fg); background: var(--bg); }
+    input::placeholder { color: var(--muted); }
+    input::-webkit-inner-spin-button { display: none; }
 
-    .actions { display: flex; gap: 8px; }
+    .foot { color: var(--muted); font-size: 12px; min-height: 36px; }
+    .foot code { font: 12px ui-monospace, Consolas, monospace; color: var(--fg); }
+
     button {
-      flex: 1; padding: 8px 12px; font: inherit; font-weight: 600; cursor: pointer;
-      border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text);
-      transition: filter 0.15s, transform 0.05s;
+      margin-left: auto; height: 24px; padding: 0 10px; flex: none;
+      font: inherit; font-size: 12px; color: var(--bg); background: var(--fg);
+      border: none; border-radius: 5px; cursor: pointer;
     }
-    button:hover { filter: brightness(0.97); }
-    button:active { transform: translateY(1px); }
-    button.primary { border: none; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
-    button.primary:hover { filter: brightness(1.08); }
-
-    .hint {
-      margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);
-      color: var(--muted); font-size: 12px;
-    }
-    code {
-      font: 12px ui-monospace, "Cascadia Code", Consolas, monospace;
-      background: var(--card); border: 1px solid var(--border);
-      padding: 1px 5px; border-radius: 5px; color: var(--text); white-space: nowrap;
-    }
+    button:disabled { background: var(--line); color: var(--muted); cursor: default; }
+    button.link { background: none; color: var(--fg); padding: 0; text-decoration: underline; text-underline-offset: 2px; }
   </style>
 </head>
 <body>
-  <header>
-    <img class="logo" src="icons/128.png" alt="" />
-    <div>
-      <h1>BrowserX</h1>
-      <div class="sub">让 bx 用这个浏览器干活，复用登录状态</div>
-    </div>
-    <div class="ver" id="ver"></div>
-  </header>
-
-  <div class="status wait" id="status">
-    <div class="dot"></div>
-    <div>
-      <div class="title" id="st-title">正在检查连接…</div>
-      <div class="detail" id="st-detail"></div>
-    </div>
+  <div class="row head">
+    <span class="brand">BrowserX</span>
+    <span class="state"><span class="dot"></span><span id="state">…</span></span>
   </div>
 
   <form id="form">
-    <label>
-      <span>浏览器名字</span>
-      <input id="name" placeholder="chrome" autocomplete="off" spellcheck="false" />
-      <small>连了多个浏览器时，用它区分，如 <code>--browser work</code></small>
-    </label>
-    <label>
-      <span>daemon 端口</span>
+    <div class="row">
+      <label for="name">名字</label>
+      <input id="name" placeholder="chrome" autocomplete="off" spellcheck="false" title="连了多个浏览器时，用 --browser 名字 区分" />
+    </div>
+    <div class="row">
+      <label for="port">端口</label>
       <input id="port" type="number" min="1" max="65535" placeholder="9777" />
-    </label>
-    <div class="actions">
-      <button type="button" id="reconnect">重连</button>
-      <button type="submit" class="primary" id="save">保存</button>
+    </div>
+    <div class="row foot">
+      <span id="info"></span>
+      <span id="off" hidden>运行 <code>bx daemon start</code> 后 <button type="button" class="link" id="retry">重试</button></span>
+      <button type="submit" id="save" disabled>保存</button>
     </div>
   </form>
-
-  <div class="hint">
-    连不上的话，先在终端执行 <code>bx daemon start</code>，再用 <code>bx browser list</code> 确认。
-  </div>
 
   <script src="options.js"></script>
 </body>
