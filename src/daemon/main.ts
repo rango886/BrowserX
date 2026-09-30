@@ -236,6 +236,11 @@ const methods: Record<string, Handler> = {
   },
 
   // ---------- 标签 ----------
+  'debug.ext': async ({ browser, method, params }) => {
+    const d = getBrowser(browser)
+    if (d.kind !== 'extension') throw new BxError('BAD_ARG', `${d.name} 不是插件模式`)
+    return (d as ExtensionDriver).ext(method, params || {})
+  },
   'tab.list': async ({ browser, filter }) => {
     let tabs = await listAllTabs(browser)
     if (filter) tabs = tabs.filter(t => t.url.includes(filter) || t.title.toLowerCase().includes(String(filter).toLowerCase()))

@@ -62,11 +62,52 @@ chrome.storage.onChanged.addListener(() => {
   ws?.close()
 })
 
+// 诊断日志：最近的 debugger 相关事件
+const dbgLog = []
+function dlog(...a) {
+  dbgLog.push(new Date().toISOString().slice(11, 23) + ' ' + a.map(x => (typeof x === 'string' ? x : JSON.stringify(x))).join(' '))
+  if (dbgLog.length > 100) dbgLog.shift()
+}
+function timeout(p, ms, what) {
+  return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} 超时 ${ms}ms`)), ms))])
+}
+
+// 等标签加载完（status=complete）。Vivaldi 里标签还在初始导航时就 attach，
+// 之后所有要渲染进程回答的 CDP 命令都会永远没有回应；Chrome 没这个问题，等一下也无害
+function waitComplete(tabId, ms = 10_000) {
+  return new Promise(resolve => {
+    let done = false
+    const finish = t => {
+      if (done) return
+      done = true
+      chrome.tabs.onUpdated.removeListener(onUpd)
+      clearTimeout(timer)
+      resolve(t)
+    }
+    const onUpd = (id, info, t) => {
+      if (id === tabId && info.status === 'complete') finish(t)
+    }
+    const timer = setTimeout(() => chrome.tabs.get(tabId).then(finish, () => finish(null)), ms)
+    chrome.tabs.onUpdated.addListener(onUpd)
+    chrome.tabs.get(tabId).then(t => t.status === 'complete' && finish(t), () => finish(null))
+  })
+}
+
 async function ensureAttached(tabId) {
   if (attached.has(tabId)) return
+  // 被休眠（discarded）的标签没有渲染进程，命令会没回应，先唤醒
+  const tab = await chrome.tabs.get(tabId)
+  if (tab.discarded || tab.status !== 'complete') {
+    dlog('wake/wait', tabId, { discarded: tab.discarded, status: tab.status })
+    if (tab.discarded) await chrome.tabs.reload(tabId)
+    await waitComplete(tabId, tab.discarded ? 15_000 : 5_000)
+  }
+  dlog('attach start', tabId)
   try {
-    await chrome.debugger.attach({ tabId }, '1.3')
+    await timeout(chrome.debugger.attach({ tabId }, '1.3'), 10_000, 'debugger.attach')
+    dlog('attach ok', tabId)
   } catch (e) {
+    dlog('attach err', tabId, String(e?.message || e))
     if (!String(e.message).includes('already attached')) throw e
   }
   attached.add(tabId)
@@ -76,6 +117,7 @@ chrome.debugger.onEvent.addListener((src, method, params) => {
   if (src.tabId !== undefined) send({ type: 'event', kind: 'cdp', tabId: src.tabId, method, params })
 })
 chrome.debugger.onDetach.addListener((src, reason) => {
+  dlog('onDetach', src.tabId, reason)
   attached.delete(src.tabId)
   send({ type: 'event', kind: 'detached', tabId: src.tabId, reason })
 })
@@ -92,7 +134,7 @@ const handlers = {
   'tabs.list': () => chrome.tabs.query({}),
   'tabs.open': async ({ url, active, windowId }) => {
     const t = await chrome.tabs.create({ url: url || 'about:blank', active: active !== false, windowId })
-    return t
+    return (await waitComplete(t.id)) || t
   },
   'tabs.close': ({ tabId }) => chrome.tabs.remove(tabId),
   'tabs.activate': async ({ tabId }) => {
@@ -120,8 +162,19 @@ const handlers = {
   'groups.ungroup': ({ tabIds }) => chrome.tabs.ungroup(tabIds),
   'cdp.send': async ({ tabId, method, params }) => {
     await ensureAttached(tabId)
-    return chrome.debugger.sendCommand({ tabId }, method, params || {})
+    try {
+      return await timeout(chrome.debugger.sendCommand({ tabId }, method, params || {}), 30_000, `sendCommand ${method}`)
+    } catch (e) {
+      dlog('send err', tabId, method, String(e?.message || e))
+      throw e
+    }
   },
+  'debug.info': async () => ({
+    attached: [...attached],
+    targets: (await chrome.debugger.getTargets()).filter(t => t.attached || t.type !== 'page').map(t => ({ type: t.type, tabId: t.tabId, attached: t.attached, url: t.url?.slice(0, 80), extensionId: t.extensionId })),
+    log: dbgLog,
+  }),
+  'runtime.reload': () => setTimeout(() => chrome.runtime.reload(), 100),
   'cdp.detach': async ({ tabId }) => {
     attached.delete(tabId)
     await chrome.debugger.detach({ tabId }).catch(() => {})
