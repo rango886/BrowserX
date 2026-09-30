@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "bx bridge",
+  "version": "0.1.0",
+  "description": "让 bx（AI 浏览器控制工具）连接到这个浏览器，复用登录状态",
+  "permissions": ["tabs", "tabGroups", "debugger", "storage", "alarms", "cookies"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "options_page": "options.html",
+  "action": { "default_title": "bx bridge", "default_popup": "options.html" }
+}

@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>bx bridge</title>
+  <style>
+    body { font: 14px system-ui, sans-serif; width: 320px; padding: 12px; }
+    label { display: block; margin: 8px 0 2px; color: #555; }
+    input { width: 100%; box-sizing: border-box; padding: 4px 6px; }
+    button { margin-top: 12px; }
+    #status { margin-top: 10px; color: #666; }
+  </style>
+</head>
+<body>
+  <h3>bx bridge</h3>
+  <label>浏览器名字（在 bx 里用它区分多个浏览器，如 work / personal）</label>
+  <input id="name" placeholder="chrome" />
+  <label>daemon 端口</label>
+  <input id="port" type="number" placeholder="9777" />
+  <button id="save">保存并重连</button>
+  <div id="status"></div>
+  <script src="options.js"></script>
+</body>
+</html>
