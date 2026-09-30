@@ -26,9 +26,9 @@ bx browser list      # 看已连接的浏览器：kind=extension 是插件模式
 ## 2. 标签
 
 ```bash
-bx tab list [过滤词]        # 所有浏览器的标签；* 是当前标签，group=bx 的是 AI 开的
-bx tab open <url>           # 新开标签并设为当前（插件模式下自动放进 "bx" 标签组）
-    --bg                    #   后台打开    --keep  不切换当前标签    --no-group  不放进组
+bx tab list [过滤词]        # 所有浏览器的标签；* 是当前标签
+bx tab open <url> --bg --keep --no-group   # 推荐写法：后台打开、不切换当前标签、不放进分组，返回新标签的 id
+                            #   （不加 --no-group 时，插件模式会把它放进 "bx" 标签组）
 bx tab use t3               # 切换当前标签（之后的页面命令默认作用在它上面）
 bx tab activate [t3]        # 在浏览器里把它切到前台，让用户看到
 bx tab close [t3 t4]        # 关标签（默认关当前）
@@ -137,6 +137,9 @@ bx script test <站点> <命令> [参数] --from-trace <名字>   # 验证，不
 
 ## 原则
 
+- **多个浏览器先问用户**：`bx browser list` 有多个浏览器时，先让用户选用哪个。之后凡是要选浏览器的命令（`tab open`、`tab list`、站点脚本）都加 `--browser <名字>`。页面命令带了 `-t` 就已经确定了浏览器，不用再加。
+- **后台开标签、不放进分组**：`bx tab open <url> --bg --keep --no-group [--browser <名字>]`，不打扰用户正在看的页面。记下返回的 `id`。
+- **操作时都指定标签**：每条页面命令都带 `-t <id>`（如 `bx read -t t5`、`bx click e3 -t t5`），不要依赖“当前标签”，它可能被别的任务改掉。
 - 查信息先用 `read`；要操作时再用 `snapshot`；截图放到最后。
 - 不要关闭或跳转用户自己的标签，需要的话自己开新标签。
-- 用完自己开的标签（group=bx 的）要记得关掉。
+- 用完自己开的标签要关掉：`bx tab close t5 t6`。
