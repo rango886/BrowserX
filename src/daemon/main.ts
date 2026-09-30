@@ -166,17 +166,25 @@ async function withChanges<T>(s: TabSession, fn: () => Promise<T>, opts: { settl
 }
 
 // =====================================================================
-// 标签组：插件模式下，AI 打开的标签默认放进 "bx" 组，一眼能看出哪些是 AI 在动
+// 标签组：tab open --group <组名或组 id> 时把新标签放进去（默认不放）
 // =====================================================================
 
-async function putInAiGroup(d: Driver, nativeId: string, title = 'bx') {
+async function putInGroup(d: Driver, nativeId: string, group: string) {
   if (!d.groups) return
   const tabs = await d.listTabs()
   const me = tabs.find(t => t.nativeId === nativeId)
   const groups = await d.groups.list()
-  const g = groups.find(g => g.title === title && g.windowId === me?.windowId)
-  if (g) await (d as ExtensionDriver).ext('groups.create', { tabIds: [Number(nativeId)], groupId: g.id })
-  else await d.groups.create([nativeId], { title, color: 'purple' })
+  // 先按 id 找，再按名字找（同一窗口优先），都没有就新建
+  const g =
+    groups.find(g => String(g.id) === group) ||
+    groups.find(g => g.title === group && g.windowId === me?.windowId) ||
+    groups.find(g => g.title === group)
+  if (g) {
+    await (d as ExtensionDriver).ext('groups.create', { tabIds: [Number(nativeId)], groupId: g.id })
+    return { id: g.id, title: g.title, created: false }
+  }
+  const n = await d.groups.create([nativeId], { title: group, color: 'purple' })
+  return { id: n.id, title: n.title, created: true }
 }
 
 // =====================================================================
@@ -247,7 +255,12 @@ const methods: Record<string, Handler> = {
     const d = getBrowser(browser)
     const t = await d.openTab('about:blank', { background })
     const id = shortFor(d.name, t.nativeId)
-    if (group !== false && d.groups) await putInAiGroup(d, t.nativeId, typeof group === 'string' ? group : 'bx').catch(e => log('group', e.message))
+    let groupInfo: any
+    let groupNote: string | undefined
+    if (group !== undefined && group !== false && group !== '') {
+      if (!d.groups) groupNote = `${d.name} 是 CDP 模式，不支持标签组，没有放进组`
+      else groupInfo = await putInGroup(d, t.nativeId, String(group)).catch(e => ((groupNote = `放进组失败：${e.message}`), undefined))
+    }
     if (!keep) currentTab = id
     const s = session(id)
     if (trace) await trace.addTab(s, 'newtab')
@@ -258,6 +271,8 @@ const methods: Record<string, Handler> = {
       const reason = await s.evaluate(`document.querySelector('.error-code')?.textContent || ''`).catch(() => '')
       out.error = `页面打开失败 ${reason}`.trim()
     }
+    if (groupInfo) out.group = groupInfo.title + (groupInfo.created ? '（新建）' : '')
+    if (groupNote) out.note = groupNote
     return out
   },
   'tab.close': async ({ ids }) => {
