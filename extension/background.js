@@ -33,7 +33,6 @@ async function connect() {
       lastError = ''
       const ua = navigator.userAgent
       sock.send(JSON.stringify({ type: 'hello', name, userAgent: ua, extensionId: chrome.runtime.id }))
-      setBadge('on')
     }
     sock.onmessage = e => onMessage(JSON.parse(e.data))
     sock.onclose = () => {
@@ -41,7 +40,6 @@ async function connect() {
       if (connectedAt) lastError = '连接断开'
       else lastError = `连不上 127.0.0.1:${port}`
       connectedAt = 0
-      setBadge('')
       setTimeout(connect, 3000)
     }
     sock.onerror = () => {}
@@ -50,10 +48,8 @@ async function connect() {
   }
 }
 
-function setBadge(text) {
-  chrome.action.setBadgeText({ text }).catch(() => {})
-  chrome.action.setBadgeBackgroundColor({ color: '#2a7' }).catch(() => {})
-}
+// 不在图标上显示角标；清掉旧版本可能留下的
+chrome.action.setBadgeText({ text: '' }).catch(() => {})
 
 function send(obj) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj))
