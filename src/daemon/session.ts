@@ -1,4 +1,5 @@
 import type { Driver } from './types.ts'
+import type { Trace } from './trace.ts'
 import { BxError, globToRegExp, sleep } from '../common/util.ts'
 
 export interface NetEntry {
@@ -62,6 +63,12 @@ export class TabSession {
   inits: { id: string; source: string; label: string }[] = []
   loading = false
   mainFrameId = ''
+  /** 正在录制 trace 时指向录制器 */
+  tracer?: Trace
+  /** bx 自己正在操作（用来区分用户手动操作） */
+  acting = 0
+  actedAt = 0
+  private extraCookies = new Map<string, string[]>()
   lastUrl = ''
 
   driver: Driver
@@ -136,6 +143,7 @@ export class TabSession {
           this.clearRefs()
           this.lastUrl = p.frame.url
           this.mainFrameId = p.frame.id
+          this.tracer?.onNavigate(this, p.frame.url)
         }
         break
       case 'Page.frameStartedLoading':
@@ -152,6 +160,7 @@ export class TabSession {
         this.dialogs.push({ type: p.type, message: p.message, url: p.url, at: Date.now(), handled: accept ? 'accepted' : 'dismissed' })
         if (this.dialogs.length > 50) this.dialogs.shift()
         this.send('Page.handleJavaScriptDialog', { accept, promptText: p.defaultPrompt || '' }).catch(() => {})
+        this.tracer?.onDialog(this, p)
         break
       }
       case 'Runtime.consoleAPICalled':
@@ -179,6 +188,11 @@ export class TabSession {
         if (old) old.done = true
         this.net.set(p.requestId, e)
         this.netOrder.push(e)
+        if (this.tracer) {
+          this.tracer.onRequestStart(this, e)
+          const ck = this.extraCookies.get(p.requestId)
+          if (ck) this.tracer.onCookies(this, e, ck)
+        }
         if (this.netOrder.length > 1000) {
           const x = this.netOrder.shift()!
           if (this.net.get(x.requestId) === x) this.net.delete(x.requestId)
@@ -203,6 +217,7 @@ export class TabSession {
           e.size = p.encodedDataLength
           e.duration = Date.now() - e.start
           this.fireNetWaiters(e)
+          this.tracer?.onRequestDone(this, e)
         }
         break
       }
@@ -213,9 +228,24 @@ export class TabSession {
           e.failed = p.blockedReason ? `blocked:${p.blockedReason}` : p.errorText
           e.duration = Date.now() - e.start
           this.fireNetWaiters(e)
+          this.tracer?.onRequestDone(this, e)
         }
         break
       }
+      case 'Network.requestWillBeSentExtraInfo': {
+        if (!this.tracer) break
+        const names = (p.associatedCookies || []).filter((c: any) => !c.blockedReasons?.length).map((c: any) => c.cookie.name)
+        const e = this.net.get(p.requestId)
+        if (e && !e.done) this.tracer.onCookies(this, e, names)
+        else {
+          this.extraCookies.set(p.requestId, names)
+          if (this.extraCookies.size > 200) this.extraCookies.delete(this.extraCookies.keys().next().value!)
+        }
+        break
+      }
+      case 'Runtime.bindingCalled':
+        if (p.name === '__bx_trace') this.tracer?.onUser(this, p.payload)
+        break
       case 'Fetch.requestPaused':
         this.onRequestPaused(p).catch(() => {})
         break

@@ -122,7 +122,8 @@ export function render(v: any, fmt: Format, kind?: string): string {
   if (kind === 'read') return renderRead(v)
   if (typeof v.text === 'string' && Object.keys(v).every(k => ['text', 'refs', 'truncated'].includes(k))) return v.text
   if (Array.isArray(v)) {
-    if (v.length && v.every(x => x && typeof x === 'object' && !Array.isArray(x))) return table(v)
+    if (!v.length) return '(空)'
+    if (v.every(x => x && typeof x === 'object' && !Array.isArray(x))) return table(v)
     return v.map(x => (typeof x === 'object' ? JSON.stringify(x) : String(x))).join('\n')
   }
   return yaml(v)

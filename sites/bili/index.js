@@ -40,12 +40,54 @@ async function videoView(ctx, v) {
   return api(ctx, 'x/web-interface/view', v)
 }
 
+// 排行榜分区 → [网址里的名字, rid]（用 bx 把每个分区点一遍、从网络记录里读出来的）
+const RANK_RID = {
+  全部: ['all', 0], 动画: ['douga', 1005], 游戏: ['game', 1008], 鬼畜: ['kichiku', 1007], 音乐: ['music', 1003], 舞蹈: ['dance', 1004],
+  影视: ['cinephile', 1001], 娱乐: ['ent', 1002], 知识: ['knowledge', 1010], 科技数码: ['tech', 1012], 美食: ['food', 1020], 汽车: ['car', 1013],
+  时尚美妆: ['fashion', 1014], 体育运动: ['sports', 1018], 动物: ['animal', 1024],
+}
+const PGC_RANK = ['番剧', '国创', '纪录片', '电影', '电视剧', '综艺', 'anime', 'guochuang', 'documentary', 'movie', 'tv', 'variety']
+
 export default {
   name: 'bili',
-  description: 'B 站：搜索、视频信息、评论、下载、UP 主投稿和动态',
+  description: 'B 站：搜索、排行榜、视频信息、评论、下载、UP 主投稿和动态',
   home: 'https://www.bilibili.com',
   domains: ['bilibili.com'],
   commands: {
+    // 根据 trace "rank" 的调查报告写的：数据在 x/web-interface/ranking/v2 的 data.list[]，带 wbi 签名，rid 是分区
+    rank: {
+      summary: '热门排行榜（可按分区）',
+      args: [{ name: 'category', desc: `分区：${Object.keys(RANK_RID).join(' / ')}（也可以写网址里的英文，如 douga）`, optional: true }],
+      opts: { limit: { type: 'number', default: 100, desc: '前多少名（最多 100）' } },
+      examples: ['bx bili rank', 'bx bili rank 动画 --limit 10', 'bx bili rank 知识 | bx bili video comments - --limit 3'],
+      async *run(ctx) {
+        const name = ctx.args.category || '全部'
+        const hit = Object.entries(RANK_RID).find(([k, v]) => k === name || v[0] === name)
+        if (!hit) {
+          if (PGC_RANK.includes(name)) throw new Error(`${name} 是番剧/影视类榜单，走的是 pgc 接口，还没支持`)
+          throw new Error(`没有分区“${name}”，可选：${Object.keys(RANK_RID).join(' / ')}`)
+        }
+        const d = await api(ctx, 'x/web-interface/ranking/v2', { rid: hit[1][1], type: 'all', web_location: '333.934' }, { sign: true })
+        let i = 0
+        for (const v of d.list || []) {
+          yield {
+            rank: ++i,
+            bvid: v.bvid,
+            title: v.title,
+            author: v.owner?.name,
+            mid: v.owner?.mid,
+            view: v.stat?.view,
+            like: v.stat?.like,
+            danmaku: v.stat?.danmaku,
+            reply: v.stat?.reply,
+            duration: dur(v.duration),
+            pubdate: time(v.pubdate),
+            url: `https://www.bilibili.com/video/${v.bvid}`,
+          }
+          if (i >= ctx.opts.limit) return
+        }
+      },
+    },
     me: {
       summary: '当前浏览器登录的账号',
       async run(ctx) {

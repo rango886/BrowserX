@@ -65,6 +65,7 @@ bx browser launch ci --headless
 | 操作 | `goto back forward reload click fill type press select check uncheck hover scroll upload drag wait` |
 | 注入 | `inject add / list / rm`（每次打开页面前、在页面自己的 JS 之前执行） |
 | 网络 | `net log / show / wait / clear`、`net route add / list / rm`（屏蔽、mock、改请求头） |
+| 录制 → 写脚本 | `trace start / mark / add / stop / list / digest / show / find / rm`、`script new / test` |
 | 扩展 | `site list`、`reader list`、`cdp <method> [json]`（直接发 CDP，逃生通道） |
 
 ### 给 AI 用的几个设计
@@ -72,6 +73,7 @@ bx browser launch ci --headless
 - **当前标签**：`tab open` / `tab use` 之后，页面命令默认作用在它上面，就像 `cd`。多个 agent 并行时，各自设置 `BX_TAB=t3`。
 - **按编号操作**：`snapshot` 给可操作元素编号，`click e3` / `fill e5 文字`。编号一直递增、不复用；页面跳转后旧编号会报错并提示重新 snapshot，不会误点到新页面的元素。
 - **操作后返回变化**：URL 变了、页面跳转了、弹了 alert、打开了新标签，都会写在 `changes` 里，不用每次都重新截图。
+- **不标准的按钮也能点**：带点击事件的 div / li（鼠标是手型的）在 snapshot 里显示为 `clickable`，同样有编号。
 - **自动等待和检查**：点击前会检查元素有没有被遮罩挡住，有的话直接说是谁挡的。
 - **报错带下一步**：每个错误都带 `→` 提示，告诉你该执行什么。
 - **AI 打开的标签自动进 "bx" 标签组**（插件模式），你一眼能看出哪些是 AI 在动。
@@ -101,6 +103,7 @@ bx read --scroll 3      # 先向下滚 3 屏（懒加载）
 bx site list
 bx bili --help
 bx bili search 最近有什么电影 --limit 10
+bx bili rank 动画 --limit 20
 bx bili video info BV1GJ411x7h7
 bx bili video comments BV1GJ411x7h7 --limit 50 -o csv > 评论.csv
 bx bili video download BV1GJ411x7h7 --quality 1080 --out ./videos
@@ -119,6 +122,18 @@ bx form fill https://example.com/apply --file 表格.csv --map mapping.yaml --su
 
 写站点脚本见 [docs/sites.md](docs/sites.md)。
 
+## 录制 → 调查报告 → 写脚本
+
+```bash
+bx trace start rank --goal "B站排行榜：排名、标题、UP主、播放量，支持切换分区"
+bx reload; bx read; bx click e418; bx read      # 或者让用户在浏览器里手动点一遍
+bx trace stop                                   # 自动生成调查报告
+bx script new mysite --from-trace rank          # 根据报告生成脚本骨架
+bx script test mysite list --from-trace rank    # 验证输出，和录制时看到的内容对比
+```
+
+报告里有：数据来自哪个接口的哪个字段（数据溯源）、签名 / 翻页 / 时间戳参数、参数来自输入还是前一个接口、每步操作触发了哪些接口、参数怎么随操作变化。详见 [docs/trace.md](docs/trace.md)。
+
 ## 目录
 
 ```
@@ -127,6 +142,9 @@ src/cli/                命令解析、输出格式、站点脚本运行器
 src/daemon/             daemon：注册表、会话、snapshot、操作、read
 src/daemon/drivers/     插件驱动 / CDP 驱动
 src/inject/extract.js   注入页面的通用提取器
+src/daemon/trace.ts      trace 录制
+src/trace/digest.ts      调查报告：去噪、归纳、数据溯源、参数溯源
+src/cli/script.ts        script new / script test
 src/sdk/                站点脚本用的 ctx / Tab
 extension/              浏览器插件（MV3）
 sites/                  内置站点脚本：bili、google、form
@@ -137,12 +155,11 @@ test/                   端到端测试（npm test）
 ## 测试
 
 ```bash
-npm test     # 启动本地测试站点 + 无头 Chrome，跑 19 项端到端测试
+npm test     # 启动本地测试站点 + 无头 Chrome，跑 24 项端到端测试
 ```
 
 ## 还没做的（按优先级）
 
-- `trace` 录制 + `trace digest`（去噪、接口归纳、数据溯源）→ 让 AI 根据报告写站点脚本
 - MCP 服务：把内置命令和所有站点脚本自动暴露成 MCP 工具（schema 已经有了）
 - `ask-human`：遇到验证码 / 扫码时暂停并通知用户
 - 按域名的持久注入目录、密码保险箱（`fill e5 --secret xxx`）、敏感操作确认

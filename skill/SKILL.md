@@ -68,6 +68,26 @@ bx form fill <url> --file x.csv --submit 提交
 - 被捕获输出时默认是 JSONL，`-o yaml` / `-o table` 更好读。
 - 可以用管道串：`bx bili search 电影 --limit 5 | bx bili video comments - --limit 3`。
 
+## 把一个网站的操作固化成脚本（没有现成站点脚本、又需要反复做时）
+
+```bash
+bx tab open <url>
+bx trace start <名字> --goal "要拿什么数据、支持什么参数"
+bx reload                              # 先 reload，页面加载时的接口也能录到
+bx read                                # 拿到数据后一定 read 一次（报告靠它做数据溯源）
+# … 翻页 / 切换分类 / 搜索，每次操作后再 read 一次 …
+bx trace stop
+bx trace digest <名字>                 # 读调查报告：先看"结论"
+bx script new <站点> --from-trace <名字>   # 生成骨架（附 TRACE.md）
+# 按报告改骨架：命令名、参数、翻页、输出字段（带上 id / url）
+bx script test <站点> <命令> [参数] --from-trace <名字>   # 不通过就继续改
+```
+
+- 报告说有签名：用 `tab.waitResponse` 截获页面自己发的请求（按报告里的操作步骤触发）；没有签名：用 `tab.fetch` 直接调。
+- 看细节：`bx trace show <名字> <请求号> --path data.list[0]`，`bx trace find <名字> "文字"`。
+- 让用户演示也行：`trace start` 之后请用户在那个标签里手动操作一遍，再 `trace stop`。
+- 写法参考：仓库里的 docs/sites.md、docs/trace.md。
+
 ## 原则
 
 - 读信息优先用 `read`，要操作时才用 `snapshot`，截图留到最后。

@@ -184,8 +184,13 @@ export async function runSite(site: SiteSpec, argv: string[], g: GlobalOpts) {
   const rpc = await RpcClient.connect()
   const collected: any[] = []
   const stream = fmt === 'jsonl'
+  // 统计 undefined 字段：JSON 序列化时会被丢掉，往往是字段路径写错了
+  let emitted = 0
+  const undef = new Map<string, number>()
   const emit = (x: any) => {
     if (x === undefined) return
+    emitted++
+    if (x && typeof x === 'object' && !Array.isArray(x)) for (const [k, val] of Object.entries(x)) if (val === undefined) undef.set(k, (undef.get(k) || 0) + 1)
     if (stream) process.stdout.write(JSON.stringify(x) + '\n')
     else collected.push(x)
   }
@@ -227,6 +232,7 @@ export async function runSite(site: SiteSpec, argv: string[], g: GlobalOpts) {
       await runOnce(bindArgs(positionals))
     }
   } finally {
+    for (const [k, c] of undef) if (c === emitted) process.stderr.write(`⚠ 字段 ${k} 在全部 ${c} 条记录里都是 undefined（字段路径写错了？）\n`)
     if (global.opened.length && !process.env.BX_KEEP_TABS) await rpc.call('tab.close', { ids: global.opened }).catch(() => {})
     if (!stream) {
       const out = collected.length === 1 && !Array.isArray(collected[0]) && fmt !== 'csv' && fmt !== 'table' ? collected[0] : collected

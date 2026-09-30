@@ -9,6 +9,8 @@ import { ExtensionDriver } from './drivers/extension.ts'
 import { snapshot } from './snapshot.ts'
 import * as act from './actions.ts'
 import { read, loadReaders } from './read.ts'
+import { Trace, DESCRIBE_FN, listTraces, traceDir } from './trace.ts'
+import { digestTrace } from '../trace/digest.ts'
 import { BX_HOME, DAEMON_FILE, DEFAULT_PORT, ensureDir, readConfig } from '../common/paths.ts'
 import { BxError, sleep, urlMatches } from '../common/util.ts'
 
@@ -248,6 +250,7 @@ const methods: Record<string, Handler> = {
     if (group !== false && d.groups) await putInAiGroup(d, t.nativeId, typeof group === 'string' ? group : 'bx').catch(e => log('group', e.message))
     if (!keep) currentTab = id
     const s = session(id)
+    if (trace) await trace.addTab(s, 'newtab')
     if (url && url !== 'about:blank') await act.goto(s, url).catch(e => log('open', e.message))
     const finalUrl = await s.evaluate('location.href').catch(() => url)
     const out: any = { id, browser: d.name, url: finalUrl, title: await s.evaluate('document.title').catch(() => ''), current: !keep }
@@ -515,6 +518,102 @@ const methods: Record<string, Handler> = {
     return { readers: readers.map(r => ({ name: r.name, scope: r.scope, match: r.meta.match, file: r.file, description: r.meta.description })), errors: errors.length ? errors : undefined }
   },
   'cdp.send': async ({ tab, method, params }) => session(tab).send(method, params),
+
+  // ---------- trace 录制 ----------
+  'trace.start': async ({ name, goal, tab, noTab }) => {
+    if (trace) throw new BxError('TRACING', `正在录制 ${trace.name}`, '先 `bx trace stop`')
+    const n = name || 'trace-' + new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
+    const t = new Trace(n, goal)
+    trace = t
+    try {
+      if (!noTab && (tab || currentTab)) await t.addTab(session(tab))
+    } catch (e: any) {
+      log('trace addTab', e.message)
+    }
+    return {
+      ...t.status(),
+      note: '开始录制。之后用 bx 操作的标签会自动加入；用户在这些标签里手动点击/输入也会记下。关键步骤可以 bx trace mark "说明"，结束用 bx trace stop',
+    }
+  },
+  'trace.status': async () => (trace ? trace.status() : { recording: false }),
+  'trace.mark': async ({ note, tab }) => {
+    if (!trace) throw new BxError('NOT_TRACING', '没有在录制', '`bx trace start --goal "要做什么"`')
+    trace.add({ tab: tab || currentTab || '', type: 'mark', note })
+    return { ok: true, t: trace.rel() }
+  },
+  'trace.add': async ({ tab }) => {
+    if (!trace) throw new BxError('NOT_TRACING', '没有在录制')
+    await trace.addTab(session(tab), 'newtab')
+    return trace.status()
+  },
+  'trace.stop': async () => {
+    if (!trace) throw new BxError('NOT_TRACING', '没有在录制')
+    const t = trace
+    trace = null
+    const r = await t.stop()
+    const report = digestTrace(r.dir)
+    return { ...r, report: report.file, next: `bx trace digest ${r.name}   # 查看调查报告；写脚本：bx script new <站点名> --from-trace ${r.name}` }
+  },
+  'trace.list': async () => listTraces(),
+  'trace.rm': async ({ name }) => {
+    const d = traceDir(name)
+    fs.rmSync(d, { recursive: true, force: true })
+    return { removed: name }
+  },
+}
+
+// =====================================================================
+// trace：录制期间，把操作和观察到的内容记下来
+// =====================================================================
+
+let trace: Trace | null = null
+const TRACED_ACTIONS = new Set(['page.goto', 'page.back', 'page.forward', 'page.reload', 'page.click', 'page.hover', 'page.fill', 'page.press', 'page.type', 'page.select', 'page.check', 'page.upload', 'page.drag', 'page.scroll', 'page.wait', 'tab.open', 'tab.use', 'page.fetch'])
+const TRACED_OBS = new Set(['page.read', 'page.snapshot', 'page.eval', 'net.show', 'net.wait'])
+
+async function traced(method: string, p: any, h: Handler) {
+  const t = trace!
+  let s: TabSession | undefined
+  if (method !== 'tab.open') {
+    try {
+      s = session(p.tab)
+      await t.addTab(s, 'auto')
+    } catch {}
+  }
+  const describe = async (ref?: string) => (s && ref ? s.callOn(s.resolveRef(ref), DESCRIBE_FN).catch(() => undefined) : undefined)
+  const target = await describe(p.ref || p.from)
+  const toTarget = p.to ? await describe(p.to) : undefined
+  const short = method.replace(/^page\./, '')
+  const args: any = {}
+  for (const k of ['url', 'ref', 'text', 'keys', 'values', 'value', 'files', 'dir', 'selector', 'fn', 'match', 'id', 'section', 'via', 'mode', 'code', 'init', 'submit', 'from', 'to']) if (p[k] !== undefined) args[k] = p[k]
+  if (s) s.acting++
+  const t0 = t.rel() // 记操作开始的时间，这样它触发的请求排在它后面
+  try {
+    const r = await h(p)
+    const tab = s?.shortId || r?.id || ''
+    if (TRACED_OBS.has(method)) {
+      const out = typeof r === 'string' ? r : JSON.stringify(r)
+      t.add({ t: t0, tab, type: 'observe', method: short, args, output: out.slice(0, 60000) })
+    } else {
+      const ev: any = { t: t0, tab, type: 'action', method: short, args }
+      if (target) ev.target = target
+      if (toTarget) ev.toTarget = toTarget
+      if (r?.changes) ev.changes = r.changes
+      if (method === 'page.fill' && r?.value !== undefined) ev.value = r.value
+      if (method === 'page.fetch') ev.status = r?.status
+      t.add(ev)
+      // 操作打开的新标签也加进录制
+      for (const nt of r?.changes?.newTabs || []) await t.addTab(session(nt.id), 'newtab').catch(() => {})
+    }
+    return r
+  } catch (e: any) {
+    t.add({ t: t0, tab: s?.shortId || '', type: 'action', method: short, args, target, error: e.message })
+    throw e
+  } finally {
+    if (s) {
+      s.acting--
+      s.actedAt = Date.now()
+    }
+  }
 }
 
 // =====================================================================
@@ -524,6 +623,7 @@ const methods: Record<string, Handler> = {
 const config = readConfig()
 const PORT = Number(config.port || DEFAULT_PORT)
 const TOKEN = crypto.randomBytes(16).toString('hex')
+const BOOT = Date.now()
 
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
@@ -577,10 +677,15 @@ function onClient(ws: WebSocket) {
     } catch {
       return
     }
+    // daemon 刚启动时插件还没连上：稍等一下再回答，免得报"没有浏览器"
+    if (browsers.size === 0 && !String(msg.method).startsWith('daemon.') && !String(msg.method).startsWith('trace.') && msg.method !== 'browser.launch' && msg.method !== 'browser.connect') {
+      while (browsers.size === 0 && Date.now() - BOOT < 6000) await sleep(200)
+    }
     const h = methods[msg.method]
     try {
       if (!h) throw new BxError('NO_METHOD', `未知方法 ${msg.method}`)
-      const result = await h(msg.params || {})
+      const params = msg.params || {}
+      const result = trace && (TRACED_ACTIONS.has(msg.method) || TRACED_OBS.has(msg.method)) ? await traced(msg.method, params, h) : await h(params)
       ws.send(JSON.stringify({ id: msg.id, result: result ?? null }))
     } catch (e: any) {
       const err = e instanceof BxError ? e.toJSON() : { code: 'ERROR', message: String(e?.message || e) }

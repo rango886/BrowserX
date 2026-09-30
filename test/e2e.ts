@@ -199,6 +199,76 @@ try {
   await test('未知命令给出提示', () => {
     assert.match(bxErr('nope'), /bx help/)
   })
+
+  await test('snapshot：带点击事件的普通元素也有编号', () => {
+    bx('goto', `${U}/search`)
+    assert.match(bx('snapshot', '-i'), /clickable "热门推荐" \[ref=e\d+\]/)
+  })
+
+  await test('trace：录制 → 报告（数据溯源 / 签名 / 翻页 / 参数来源）', () => {
+    try {
+      bx('trace', 'rm', 'e2e')
+    } catch {}
+    bx('trace', 'start', 'e2e', '--goal', '搜索视频')
+    const q = bx('snapshot', '-i').match(/textbox "关键词" \[ref=(e\d+)\]/)![1]
+    bx('fill', q, '猫咪', '--submit')
+    bx('read')
+    bx('trace', 'mark', '翻页')
+    const snap = bx('snapshot', '-i')
+    bx('click', snap.match(/button "下一页" \[ref=(e\d+)\]/)![1])
+    bx('click', bx('snapshot', '-i').match(/link "[^"]+" \[ref=(e\d+)\]/)![1])
+    const r = json('trace', 'stop')
+    assert.ok(r.bodies >= 3)
+    const rep = bx('trace', 'digest', 'e2e')
+    assert.match(rep, /\*\*数据来源：`GET 127\.0\.0\.1:\d+\/api\/search`\*\*/)
+    assert.match(rep, /参数里有签名：sign/)
+    assert.match(rep, /\| q \| `猫咪`.*来自输入 "猫咪"/)
+    assert.match(rep, /\| page \|.*翻页参数/)
+    assert.match(rep, /\| ts \|.*时间戳/)
+    assert.match(rep, /data\.items\[\]\.title/)
+    assert.match(rep, /参数 `id` 来自 GET .*\/api\/search 的 data\.items\[\]\.id/)
+    assert.match(rep, /fill e\d+ input \(#q\) = "猫咪" \+ 回车 → `.*\/api\/search`/)
+    assert.doesNotMatch(rep, /api\/track/) // 埋点被去掉
+  })
+
+  await test('trace show / find', () => {
+    const hits = json('trace', 'find', 'e2e', '猫咪 相关视频第 3 个')
+    assert.ok(hits.some((h: any) => h.path === 'data.items[2].title'))
+    const d = json('trace', 'show', 'e2e', String(hits[0].id), '--path', 'data.items[0]')
+    assert.equal(d.json.author.name, '作者1')
+  })
+
+  await test('script new 根据 trace 生成骨架，骨架能直接跑', () => {
+    fs.rmSync(path.join(HOME, 'sites', 'e2esite'), { recursive: true, force: true })
+    const r = json('script', 'new', 'e2esite', '--from-trace', 'e2e')
+    const code = fs.readFileSync(r.file, 'utf8')
+    assert.match(code, /waitResponse\("\/api\/search"\)/) // 有签名 → 截获方案
+    assert.match(code, /fill \[#q\] = "猫咪" \+ 回车/) // 操作步骤写进注释
+    assert.ok(fs.existsSync(r.report))
+    // 像 AI 一样补上触发搜索的那一步
+    fs.writeFileSync(
+      r.file,
+      code.replace(
+        /await tab\.goto\(("[^"]+")\).*\n/,
+        (_m, url) => `await tab.goto(${url})\n        await tab.eval(q => { const el = document.querySelector('#q'); el.value = q; el.form.requestSubmit() }, ctx.args.query)\n`,
+      ),
+    )
+    const out = execFileSync(process.execPath, [path.join(ROOT, 'bin/bx.js'), 'script', 'test', 'e2esite', 'list', '猫咪', '--from-trace', 'e2e'], { env, encoding: 'utf8' })
+    assert.match(out, /^✓/)
+    assert.match(out, /输出 5 条/)
+    assert.match(out, /录制时看到的 \d+ 条内容里，[1-9]\d* 条出现在输出里/)
+  })
+
+  await test('script test 发现写错的字段', () => {
+    const f = path.join(HOME, 'sites', 'e2esite', 'index.js')
+    fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/yield \{ title: x\?\.title \}/, 'yield { title: x?.titel, id: x?.id }'))
+    try {
+      execFileSync(process.execPath, [path.join(ROOT, 'bin/bx.js'), 'script', 'test', 'e2esite', 'list', '猫咪'], { env, encoding: 'utf8' })
+      throw new Error('应该失败')
+    } catch (e: any) {
+      assert.match(String(e.stdout), /字段 title 全是 undefined/)
+    }
+  })
 } finally {
   try {
     bx('browser', 'disconnect', 'e2e', '--kill')

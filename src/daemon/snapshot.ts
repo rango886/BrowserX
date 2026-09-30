@@ -55,6 +55,7 @@ export async function snapshot(s: TabSession, opts: SnapshotOpts = {}) {
 
   const { nodes } = (await s.send('Accessibility.getFullAXTree', {})) as { nodes: AXNode[] }
   const byId = new Map(nodes.map(n => [n.nodeId, n]))
+  const clickable = await findClickables(s).catch(() => new Map<number, string>())
 
   // 同进程的 iframe：取它们的 AX 树，挂到对应的 Iframe 节点下面
   const frameRoots = new Map<number, AXNode>() // iframe 元素的 backendNodeId -> 子 frame 的根
@@ -128,6 +129,13 @@ export async function snapshot(s: TabSession, opts: SnapshotOpts = {}) {
         lines.push(`${'  '.repeat(depth)}- iframe "${clip(name, 80)}"`)
         for (const c of kids()) visit(c, depth + 1, parentName)
       }
+      return
+    }
+
+    if (n.backendDOMNodeId && clickable.has(n.backendDOMNodeId) && !INTERACTIVE.has(role)) {
+      // 带点击事件的普通元素（div / li …），无障碍树不认为它能点
+      lines.push(`${'  '.repeat(depth)}- clickable "${clip(clickable.get(n.backendDOMNodeId)!, 80)}" [ref=${s.refFor(n.backendDOMNodeId)}]`)
+      cur = null
       return
     }
 
@@ -229,4 +237,54 @@ function hasInteractive(n: AXNode, byId: Map<string, AXNode>, depth = 0): boolea
     const c = byId.get(id)
     return c ? hasInteractive(c, byId, depth + 1) : false
   })
+}
+
+/**
+ * 找"看起来能点"的普通元素：鼠标是手型、自己和祖先 / 子孙都不是标准交互元素。
+ * 返回 backendNodeId -> 文字
+ */
+async function findClickables(s: TabSession): Promise<Map<number, string>> {
+  const r = await s.send('Runtime.evaluate', {
+    expression: `(() => {
+      const INTER = 'a,button,input,select,textarea,label,summary,[role=button],[role=link],[role=tab],[role=menuitem],[role=option],[role=checkbox],[role=radio],[role=switch],[contenteditable=""],[contenteditable=true]';
+      const out = [], texts = [];
+      const all = document.body ? document.body.querySelectorAll('div,li,span,p,img,svg,i,em,section,dd,dt,td,h1,h2,h3,h4,h5,h6') : [];
+      for (const el of all) {
+        if (out.length >= 150) break;
+        if (getComputedStyle(el).cursor !== 'pointer') continue;
+        const p = el.parentElement;
+        if (p && getComputedStyle(p).cursor === 'pointer' && !p.matches(INTER)) continue; // 只要最外层
+        if (el.closest(INTER) || el.querySelector(INTER)) continue;
+        if (el.checkVisibility && !el.checkVisibility({ checkVisibilityCSS: true })) continue;
+        const t = (el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('alt') || '').trim().replace(/\\s+/g, ' ');
+        if (!t || t.length > 60) continue;
+        out.push(el); texts.push(t);
+      }
+      return { els: out, texts };
+    })()`,
+    returnByValue: false,
+  })
+  const map = new Map<number, string>()
+  const objId = r.result?.objectId
+  if (!objId) return map
+  const props = await s.send('Runtime.getProperties', { objectId: objId, ownProperties: true })
+  const get = (name: string) => props.result.find((p: any) => p.name === name)?.value?.objectId
+  const elsId = get('els')
+  const textsId = get('texts')
+  if (!elsId || !textsId) return map
+  const [els, texts] = await Promise.all([
+    s.send('Runtime.getProperties', { objectId: elsId, ownProperties: true }),
+    s.send('Runtime.callFunctionOn', { objectId: textsId, functionDeclaration: 'function(){ return this }', returnByValue: true }),
+  ])
+  const list = els.result.filter((p: any) => /^\d+$/.test(p.name) && p.value?.objectId)
+  await Promise.all(
+    list.map(async (p: any) => {
+      try {
+        const d = await s.send('DOM.describeNode', { objectId: p.value.objectId })
+        map.set(d.node.backendNodeId, texts.result.value[Number(p.name)])
+      } catch {}
+    }),
+  )
+  s.send('Runtime.releaseObject', { objectId: objId }).catch(() => {})
+  return map
 }

@@ -6,6 +6,8 @@ import { BX_HOME, REPO_ROOT } from '../common/paths.ts'
 import { BxError, sleep } from '../common/util.ts'
 import { render, type Format } from './output.ts'
 import { listSites, loadSite, runSite, siteHelp } from './sites.ts'
+import { traceDirOf, scriptNew, scriptTest } from './script.ts'
+import { digestTrace, showRequest, findInTrace } from '../trace/digest.ts'
 
 type Opt = { type: 'string' | 'boolean'; short?: string; desc?: string; multiple?: boolean }
 interface Cmd {
@@ -309,6 +311,50 @@ const COMMANDS: Record<string, Cmd> = {
     summary: '直接发 CDP 命令（逃生通道）',
     run: async (p, o, rpc) => (await rpc()).call('cdp.send', { tab: o.tab, method: p[0], params: p[1] ? JSON.parse(p[1]) : {} }),
   },
+
+  // ---------------- trace ----------------
+  'trace start': {
+    args: '[name]',
+    summary: '开始录制：操作、手动操作、接口请求、看到的内容都会记下来',
+    opts: { goal: { type: 'string', short: 'g', desc: '这次要做什么（写进报告，很重要）' }, 'no-tab': { type: 'boolean', desc: '先不录当前标签' } },
+    run: async (p, o, rpc) => (await rpc()).call('trace.start', { name: p[0], goal: o.goal, tab: o.tab, noTab: o['no-tab'] }),
+  },
+  'trace stop': { summary: '停止录制，生成调查报告', run: async (_, __, rpc) => (await rpc()).call('trace.stop') },
+  'trace status': { summary: '当前录制状态', run: async (_, __, rpc) => (await rpc()).call('trace.status') },
+  'trace mark': { args: '<note>', summary: '在时间线上标注一步（比如"现在翻到第二页"）', run: async (p, o, rpc) => (await rpc()).call('trace.mark', { note: p.join(' '), tab: o.tab }) },
+  'trace add': { args: '[tab]', summary: '把一个标签加进录制（用户自己打开的标签）', run: async (p, o, rpc) => (await rpc()).call('trace.add', { tab: p[0] || o.tab }) },
+  'trace list': { summary: '已有的录制', run: async (_, __, rpc) => (await rpc()).call('trace.list') },
+  'trace rm': { args: '<name>', summary: '删除录制', run: async (p, _, rpc) => (await rpc()).call('trace.rm', { name: p[0] }) },
+  'trace digest': {
+    args: '<name>',
+    summary: '（重新）生成并显示调查报告',
+    run: async p => {
+      if (!p[0]) throw new BxError('BAD_ARGS', '需要 trace 名字', '`bx trace list`')
+      return digestTrace(traceDirOf(p[0])).text
+    },
+  },
+  'trace show': {
+    args: '<name> <请求号>',
+    summary: '看录制里某个请求的完整响应',
+    opts: { path: { type: 'string', desc: '只看 JSON 里的一部分，如 data.replies[0]' }, max: { type: 'string' } },
+    run: async (p, o) => showRequest(traceDirOf(p[0]), Number(String(p[1]).replace('#', '')), o.path, num(o.max)),
+  },
+  'trace find': {
+    args: '<name> <text>',
+    summary: '在录制的所有响应 / 请求里搜一段文字',
+    run: async p => findInTrace(traceDirOf(p[0]), p.slice(1).join(' ')),
+  },
+  'script new': {
+    args: '<site>',
+    summary: '生成站点脚本骨架（--from-trace 根据录制生成，并附上调查报告）',
+    opts: { 'from-trace': { type: 'string' }, project: { type: 'boolean', desc: '放在项目的 .bx/sites（默认 ~/.bx/sites）' } },
+    run: async (p, o) => scriptNew(p[0], { fromTrace: o['from-trace'], project: o.project }),
+  },
+  'script test': {
+    args: '<site> <命令...> [参数]',
+    summary: '跑一遍站点命令并检查输出；--from-trace 和录制时看到的内容对比；--min 最少条数',
+    run: async () => null, // 在 main() 里特殊处理（参数要原样传给站点命令）
+  },
 }
 
 const GROUPS: [string, string[]][] = [
@@ -318,6 +364,7 @@ const GROUPS: [string, string[]][] = [
   ['看页面', ['read', 'snapshot', 'shot', 'eval', 'console', 'dialogs', 'cookies']],
   ['操作页面', ['goto', 'back', 'forward', 'reload', 'click', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'hover', 'scroll', 'upload', 'drag', 'wait']],
   ['注入 / 网络', ['inject add', 'inject list', 'inject rm', 'net log', 'net show', 'net wait', 'net clear', 'net route add', 'net route list', 'net route rm']],
+  ['录制 → 写脚本', ['trace start', 'trace mark', 'trace add', 'trace status', 'trace stop', 'trace list', 'trace digest', 'trace show', 'trace find', 'trace rm', 'script new', 'script test']],
   ['扩展', ['site list', 'reader list', 'cdp']],
   ['daemon', ['daemon start', 'daemon stop', 'daemon restart', 'daemon status', 'daemon log']],
 ]
@@ -388,6 +435,20 @@ async function main() {
 
   const cmd = COMMANDS[name]
   const rest = argv.slice(name.split(' ').length)
+  if (name === 'script test' && !rest.includes('--help')) {
+    // 自己的选项挑出来，其余原样传给站点命令
+    const own: any = {}
+    const pass: string[] = []
+    for (let i = 0; i < rest.length; i++) {
+      if (rest[i] === '--from-trace' || rest[i] === '--min' || rest[i] === '--timeout') own[rest[i].slice(2)] = rest[++i]
+      else pass.push(rest[i])
+    }
+    if (!pass[0]) throw new BxError('BAD_ARGS', '需要站点名和命令', '例：bx script test bili search 电影 --limit 5 --from-trace t1')
+    const r = await scriptTest(pass[0], pass.slice(1), { fromTrace: own['from-trace'], min: own.min ? Number(own.min) : undefined, timeout: own.timeout ? Number(own.timeout) : undefined })
+    console.log(r.text)
+    if (!r.ok) process.exitCode = 1
+    return
+  }
   if (rest.includes('--help') || rest.includes('-h')) return console.log(cmdHelp(name, cmd))
   const options: any = { tab: { type: 'string', short: 't' }, output: { type: 'string', short: 'o' } }
   for (const [k, o] of Object.entries(cmd.opts || {})) options[k] = { type: o.type, ...(o.short ? { short: o.short } : {}), ...(o.multiple ? { multiple: true } : {}) }
