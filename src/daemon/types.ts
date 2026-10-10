@@ -43,6 +43,8 @@ export interface Driver {
   onCdpEvent(h: CdpEventHandler): void
   /** 标签被关 / 调试被断开等 */
   onTabGone(h: (nativeTabId: string, reason: string) => void): void
+  /** 标签被换成了另一个原生 id（Chrome 预渲染激活时的 tabs.onReplaced） */
+  onTabReplaced?(h: (oldNativeId: string, newNativeId: string) => void): void
   onClose(h: () => void): void
   close(): Promise<void>
 }

@@ -69,12 +69,50 @@ function wireDriver(d: Driver) {
     if (s) s.onEvent(method, params)
   })
   d.onTabGone((nativeId, reason) => {
-    if (reason === 'closed' || reason === 'tabRemoved' || reason === 'target_closed') forgetTab(d.name, nativeId)
+    if (reason === 'target_closed' || reason === 'detached') {
+      // 调试连接断了，但标签还在：跨站跳转换了渲染进程（抖音等）就会这样。
+      // 编号保留；之前开着的域（网络记录等）马上重新打开，不然跳转后的请求记不到。标签真关了会另外收到 tabRemoved
+      const id = nativeShort.get(key(d.name, nativeId))
+      const s = id && sessions.get(id)
+      if (s) {
+        const was = [...s.enabled] as any[]
+        s.reset()
+        if (reason === 'target_closed' && was.length)
+          setTimeout(() => {
+            if (sessions.get(id!) === s) for (const dom of was) s.ensure(dom).catch(() => {})
+          }, 50)
+      }
+      return
+    }
+    if (reason === 'tabRemoved') {
+      // 被替换时（onReplaced 可能稍后到）等一下；到时候还指向这个旧 id 才忘掉
+      setTimeout(() => {
+        if (nativeShort.has(key(d.name, nativeId))) forgetTab(d.name, nativeId)
+      }, 300)
+      return
+    }
+    if (reason === 'closed') forgetTab(d.name, nativeId)
     else {
       const id = nativeShort.get(key(d.name, nativeId))
       const s = id && sessions.get(id)
       if (s) s.reset()
     }
+  })
+  d.onTabReplaced?.((oldId, newId) => {
+    // 同一个标签换了原生 id：编号（t5）不变，指到新 id；之前开着的 CDP 域（网络记录等）在新标签上重新打开
+    const id = nativeShort.get(key(d.name, oldId))
+    if (!id) return
+    nativeShort.delete(key(d.name, oldId))
+    nativeShort.set(key(d.name, newId), id)
+    tabShort.set(id, { browser: d.name, nativeId: newId })
+    const s = sessions.get(id)
+    if (s) {
+      const was = [...s.enabled] as any[]
+      s.nativeId = newId
+      s.reset()
+      for (const dom of was) s.ensure(dom).catch(() => {})
+    }
+    log('tab replaced', id, oldId, '->', newId)
   })
   d.onClose(() => {
     if (browsers.get(d.name) !== d) return

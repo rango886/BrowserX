@@ -12,6 +12,7 @@ export class ExtensionDriver implements Driver {
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void; method: string }>()
   private cdpHandlers: CdpEventHandler[] = []
   private goneHandlers: ((id: string, reason: string) => void)[] = []
+  private replacedHandlers: ((oldId: string, newId: string) => void)[] = []
   private closeHandlers: (() => void)[] = []
 
   name: string
@@ -35,6 +36,7 @@ export class ExtensionDriver implements Driver {
       if (msg.kind === 'cdp') this.cdpHandlers.forEach(h => h(String(msg.tabId), msg.method, msg.params))
       else if (msg.kind === 'detached' || msg.kind === 'tabRemoved')
         this.goneHandlers.forEach(h => h(String(msg.tabId), msg.reason || msg.kind))
+      else if (msg.kind === 'tabReplaced') this.replacedHandlers.forEach(h => h(String(msg.tabId), String(msg.newTabId)))
       return
     }
     if (msg.id !== undefined) {
@@ -112,6 +114,9 @@ export class ExtensionDriver implements Driver {
   }
   onTabGone(h: (id: string, reason: string) => void) {
     this.goneHandlers.push(h)
+  }
+  onTabReplaced(h: (oldId: string, newId: string) => void) {
+    this.replacedHandlers.push(h)
   }
   onClose(h: () => void) {
     this.closeHandlers.push(h)

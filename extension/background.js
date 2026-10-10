@@ -152,6 +152,13 @@ chrome.tabs.onRemoved.addListener(tabId => {
   attached.delete(tabId)
   send({ type: 'event', kind: 'tabRemoved', tabId })
 })
+// 预渲染（prerender）/ 即时页面被激活时，Chrome 会用一个新 tabId 替换掉原来的标签（抖音等网站会触发）。
+// 通知 daemon 把标签编号指到新的 tabId，不然会报“标签不存在”，还会多出一个没人管的标签
+chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+  dlog('onReplaced', removedTabId, '->', addedTabId)
+  attached.delete(removedTabId)
+  send({ type: 'event', kind: 'tabReplaced', tabId: removedTabId, newTabId: addedTabId })
+})
 
 function groupInfo(g) {
   return { id: g.id, title: g.title || '', color: g.color, collapsed: g.collapsed, windowId: g.windowId }
