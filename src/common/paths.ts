@@ -3,7 +3,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-/** 仓库根目录（内置 sites / readers 在这里） */
+/** 仓库根目录（内置函数库 lib/ 在这里） */
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 /** 全局目录：~/.bx，可用 BX_HOME 覆盖 */
@@ -30,8 +30,8 @@ export function findProjectDir(start = process.cwd()): string | null {
   }
 }
 
-/** 按优先级返回某类资源（sites / readers）的搜索目录：项目级 → 全局 → 内置 */
-export function searchDirs(kind: 'sites' | 'readers', cwd = process.cwd()): { scope: string; dir: string }[] {
+/** 按优先级返回函数库目录：项目级 → 全局 → 内置 */
+export function searchDirs(kind: 'lib', cwd = process.cwd()): { scope: string; dir: string }[] {
   const out: { scope: string; dir: string }[] = []
   const proj = findProjectDir(cwd)
   if (proj) out.push({ scope: 'project', dir: path.join(proj, kind) })

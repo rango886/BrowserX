@@ -92,8 +92,19 @@ export class ExtensionDriver implements Driver {
     await this.call('cdp.detach', { tabId: Number(id) }).catch(() => {})
   }
   /** 插件自带的一些能力（不需要 debugger） */
-  ext(method: string, params: any = {}) {
-    return this.call(method, params)
+  ext(method: string, params: any = {}, timeout?: number) {
+    return this.call(method, params, timeout)
+  }
+
+  /** 准备接住下一个下载（用 chrome.downloads，文件在浏览器的默认下载目录） */
+  async expectDownload(timeout = 120_000): Promise<{ done: Promise<{ file: string; url: string; name: string }> }> {
+    // 先确认插件有 downloads 权限，再开始等
+    await this.call('downloads.ready', {}, 5000).catch(() => {
+      throw new BxError('EXT_OUTDATED', '插件版本太旧，不支持下载', '在 chrome://extensions 里重新加载 BrowserX 插件（需要 downloads 权限）')
+    })
+    const done = this.call('downloads.wait', { timeout }, timeout + 5000)
+    done.catch(() => {})
+    return { done }
   }
 
   onCdpEvent(h: CdpEventHandler) {

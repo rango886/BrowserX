@@ -527,7 +527,7 @@ export function digestTrace(dir: string): Digest {
       if (g.htmlWhere === 'script') P(`  - 数据直接写在 HTML 的 <script> 里${g.htmlVar ? `（${g.htmlVar}）` : ''} → 打开页面后 \`tab.eval(() => ${g.htmlVar?.startsWith('window') ? g.htmlVar : 'JSON.parse(document.querySelector(...).textContent)'})\` 读出来`)
       else P('  - 数据在 HTML 正文里（服务端渲染）→ 打开页面后用 `tab.eval` 从 DOM 提取，或者 `tab.read()`')
     } else if (sign.length) {
-      P(`  - ⚠ 参数里有签名：${sign.map(p => p.key).join(', ')}。方案 A：\`tab.waitResponse('${pathOf(g.key)}')\` 截获页面自己发的请求（触发方式：${g.triggers[0] || '打开页面'}）；方案 B：找到签名算法在 Node 里实现`)
+      P(`  - ⚠ 参数里有签名：${sign.map(p => p.key).join(', ')}。先试 \`tab.fetch\` 在页面里直接请求（很多签名接口带着 cookie 也能用）；不行就 \`tab.collect('${pathOf(g.key)}', { more })\` 让页面自己发请求、我们接住返回（触发方式：${g.triggers[0] || '打开页面'}）；或者找到签名算法在 Node 里实现`)
     } else {
       P(`  - 没有签名参数 → 可以直接在页面里调：\`tab.fetch(...)\`（自动带登录状态）`)
     }
@@ -606,9 +606,8 @@ export function digestTrace(dir: string): Digest {
   P('## 下一步', '')
   P(`- 看某个响应的完整内容：\`bx trace show ${tr.name} <请求号> [--path data.list]\``)
   P(`- 在所有响应里搜一段文字：\`bx trace find ${tr.name} "文字"\``)
-  P(`- 生成脚本骨架：\`bx script new <站点名> --from-trace ${tr.name}\``)
-  P(`- 写完后验证：\`bx script test <站点名> <命令> [参数] --from-trace ${tr.name}\``)
-  P(`- 写法参考：docs/sites.md（ctx.tab / ctx.open / tab.fetch / tab.waitResponse / tab.eval）`)
+  P(`- 在 \`bx run\` 里按上面的结论试一遍（bx.tab / tab.fetch / tab.collect / tab.eval），试通了写成 \`~/.bx/lib/<域名>.js\` 里的函数`)
+  P(`- 写法参考：docs/lib.md`)
 
   const text = L.join('\n')
   const file = path.join(dir, 'report.md')

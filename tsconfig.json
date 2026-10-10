@@ -4,5 +4,5 @@
     "allowImportingTsExtensions": true, "noEmit": true, "strict": true, "noImplicitAny": false,
     "erasableSyntaxOnly": true, "verbatimModuleSyntax": true, "skipLibCheck": true, "types": ["node"]
   },
-  "include": ["src/**/*.ts", "sites/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts"]
 }

@@ -1,185 +1,223 @@
 ---
 name: browserx
-description: BrowserX（命令 bx）：用命令行控制用户的浏览器（复用登录状态）：看标签、打开网页、读页面内容、点击填表、截图、执行 JS、抓接口、拦截请求，运行站点脚本（bili / google / form 等），以及把网站操作录制成脚本。需要上网查东西、操作网页、从网站取数据时使用。
+description: BrowserX（命令 bx）：借用户已登录的浏览器上网。读网页、搜索和取数据（B 站、Google、Reddit、Hacker News 等有现成函数）、跨多个网站检索调研、点击填表、上传下载、截图、看接口请求。只要任务要用到网页内容或网站操作（尤其是要登录的网站），就用它。
 ---
 
-# BrowserX：cli 控制浏览器
+# BrowserX（bx）：借用户的浏览器上网
 
-命令行工具是 `bx`。命令都是 `bx ...`，后台 daemon 会自动启动。
-所有命令都支持 `-o text|json|yaml|jsonl|csv|table`；需要解析结果时用 `-o json`。
+`bx` 是命令行工具，后台 daemon 会自动启动。浏览器的登录状态、打开的标签、网络记录都存在 daemon 里，所以每条命令跑完就退出也不会丢东西。
 
-## 1. 连接浏览器
+## 0. 先选对工具
 
-```bash
-bx browser list      # 看已连接的浏览器：kind=extension 是插件模式，cdp 是专用浏览器
-```
-
-列表为空时，按情况处理：
-
-- **用户的 Chrome 装了 bx 插件**：插件会自动连上，插件图标显示 `on`。daemon 刚启动时可能要等几秒到半分钟，稍后重试 `bx browser list`。这种方式复用用户的登录状态，是首选。
-- **没装插件**：请用户在 `chrome://extensions` 开启“开发者模式” → “加载已解压的扩展程序” → 选仓库里的 `extension/` 目录。连多个浏览器时，在插件设置里给每个起名字（如 `work`、`personal`）。
-- **不想用 / 用不了用户的浏览器**：`bx browser launch [名字] [--headless]` 启动专用浏览器。它有独立的 profile（`~/.bx/profiles/<名字>`），登录一次以后一直有效；已经在运行的话会直接连上。
-- 已经带着 `--remote-debugging-port` 启动的浏览器：`bx browser connect http://127.0.0.1:9222 --name x`。
-
-连着多个浏览器时，`tab open` / `tab list` 用 `--browser <名字>` 指定浏览器。
-
-## 2. 标签
-
-```bash
-bx tab list [过滤词]        # 所有浏览器的标签；* 是当前标签
-bx tab open <url> --bg --keep   # 推荐写法：后台打开、不切换当前标签，返回新标签的 id
-                            #   默认不放进标签组；要放进组就加 --group <组名或组 id>（没有这个组会按名字新建，仅插件模式）
-bx tab use t3               # 切换当前标签（之后的页面命令默认作用在它上面）
-bx tab activate [t3]        # 在浏览器里把它切到前台，让用户看到
-bx tab close [t3 t4]        # 关标签（默认关当前）
-bx group list / create t3 t4 --title 资料 --color blue
-```
-
-**指定标签**：所有页面命令（read、snapshot、click、eval、net …）都能加 `-t t3`，写在命令前后都可以，比如 `bx -t t3 read`、`bx read -t t3`。也可以设置环境变量 `BX_TAB=t3`，多个任务并行时用它固定各自的标签。
-
-注意：daemon 重启后标签会重新编号，先 `tab list` 再操作。
-
-## 3. 读页面（只想知道页面上有什么时用）
-
-```bash
-bx read                  # 主要内容 + 分段目录（默认最多 6000 字）
-bx read -b               # 只看概要和分段，最省 token
-bx read -s comments      # 展开某一段（分段 id 见输出末尾）
-bx read --offset 6000    # 内容被截断时接着读（列表页按项数算）
-bx read --limit 50       # 列表页多取几项      --budget 20000  放宽字数上限    --full  不截断
-bx read --links          # 正文里保留链接地址
-bx read --scroll 3       # 先向下滚 3 屏再读（懒加载的评论、无限滚动的列表）
-```
-
-输出里的 **`via`** 说明这次用的是哪种提取方式：
-
-| via | 含义 |
+| 要做的事 | 用什么 |
 |---|---|
-| `reader:<名字>` | 这个网站的专用 reader（按网址匹配，最准）；`bx reader list` 可以看有哪些 |
-| `readability` | 按文章识别出的正文 |
-| `list` | 识别出重复结构，按列表输出（搜索结果、排行榜、商品列表） |
-| `outline` | 以上都不适用时，取页面上看得见的文字 |
+| 看一个网页讲了什么 | `bx read <网址>` |
+| 长文章 / 长评论区里只找和问题相关的部分 | `bx read <网址> --grep '关键词1\|关键词2'` |
+| 搜索引擎 | `bx call google.com search …`（被拦自动换必应 / DuckDuckGo）；中文内容加一路 `baidu.com` |
+| 在某个网站上搜索、取列表、取评论 | 先 `bx lib list` 看有没有现成函数；有就 `bx call <域名> <函数> …` |
+| 跨好几个网站调研一个问题 | `bx run -f 脚本.js`，分步做，见第 7 节 |
+| 一次做一串事、批量处理、拼接几个网站的数据 | `bx run`（写 JS，全局有 `bx` 对象） |
+| 在页面上点按钮、填表、上传、下载 | `bx snapshot -i` / `bx find` 找元素，然后 `bx click` / `bx fill` |
+| 想知道网站的数据来自哪个接口 | `bx net log --api -t <标签>`，然后 `bx net show <id>` |
 
-内容不对（比如只读到导航栏、或者把列表当成了文章）时，用 `--via readability|list|outline|<reader名>` 手动指定。
-输出里出现 💡 提示页面自带 `window.__INITIAL_STATE__` 这类数据时，直接 `bx eval "window.__INITIAL_STATE__.xxx"` 读结构化数据最准。
-
-## 4. 操作页面
-
-```bash
-bx snapshot -i                 # 可操作元素 + 编号（ref）；不加 -i 会连文字一起显示；--max 1000 放宽行数
-bx click e12                   # --double 双击  --right 右键  --force 被挡住也点
-bx fill e5 "内容" --submit     # 清空后输入，--submit 填完按回车；--append 追加不清空
-bx type "文字"                 # 往当前焦点处输入
-bx press Enter                 # 也可以 Control+A、Escape、Tab；可以连续写：bx press Control+A Delete
-bx select e7 北京              # 原生下拉框（snapshot 里 {options: …} 列出了可选项）
-bx check e8 / uncheck e8
-bx upload e9 ./a.png           # 文件输入框
-bx hover e3 / drag e3 e9
-bx scroll [down|up|top|bottom|e12] [--amount 800]   # 返回 atBottom，判断是否到底
-bx goto <url> / back / forward / reload
-bx wait --text 加载完成        # 还可以用 --gone 文字 / --selector css / --url 片段 / --fn "JS 表达式" / --idle，加 --timeout 毫秒
-```
-
-- snapshot 里的 `clickable "xxx"` 是带点击事件的普通元素（div / li），同样可以 `click`。
-- 每次操作返回 `changes`：
-  - `navigated`：页面跳转了，旧编号作废，要重新 snapshot
-  - `newTabs`：打开了新标签，用 `bx tab use <id>` 切过去
-  - `dialogs`：弹窗已自动确认；想改成取消用 `bx dialogs --policy dismiss`
-- 报“被挡住”时，先关掉弹层（`press Escape`，或者点关闭按钮）再操作。
-- 遇到登录、验证码：`bx tab activate` 把标签切到前台，请用户处理完再继续。
-
-## 5. 其它
+**开工时先跑这两条**：
 
 ```bash
-bx shot [e12] [--full] [--marks] [--save a.png]   # 截图，返回文件路径；--marks 在图上标出编号
-bx eval "document.title"        # 执行 JS，支持 await；--file x.js；--isolated 在页面察觉不到的环境里执行
-bx console [--level error]      # 控制台日志（第一次调用时才开始记录）
-bx cookies [url]
-bx net log [过滤词] [--api] [--failed] [--status 4xx]   # 请求记录（第一次调用时才开始记录，之后要 bx reload）
-bx net show <id> [--headers]    # 某个请求的响应（JSON 会自动解析）
-bx net wait "api/list"          # 等下一个匹配的请求，返回它的响应
-bx net route add "*/ads/*" --abort          # 屏蔽请求；--fulfill '{"a":1}' 或 --fulfill @文件 返回假数据；--header "k: v" 改请求头
-bx net route list / rm [id]
-bx inject add "代码"            # 这个标签以后每次打开页面，都在页面自己的 JS 之前执行；--file x.js
+bx browser list     # 有没有连上浏览器；有多个时问用户用哪个，之后都加 --browser <名字>
+bx lib list         # 有哪些网站的现成函数
 ```
 
-## 6. 站点脚本（有现成的就优先用，又快又稳）
+`browser list` 为空：先等几秒再试（插件连上要一点时间）。还是空就请用户在 `chrome://extensions` 里加载仓库的 `extension/` 目录。用户不想用自己的浏览器时，用 `bx browser launch [名字]` 启动一个专用浏览器（无头加 `--headless`，但无头浏览器没有登录状态，很多网站会拦）。
+
+## 1. 守则
+
+- **不打扰用户**：自己要用的标签在后台开（`bx tab open <url> --bg --keep` 或 `bx.open(url)`）。不要关闭或跳转用户自己的标签，用完自己开的标签要关掉（`bx tab close t5`，或在 `bx run` 里 `await bx.cleanup()`）。
+- **每条页面命令都带 `-t <标签>`**，不要依赖“当前标签”，它可能被别的任务改掉。
+- **省上下文**：大块数据写进文件，只把摘要打印出来看（一行一条、长文本截断）。`bx run` 的结果超过 2 万字会自动写到 `~/.bx/out/`，只打印路径和摘要。
+- **先读后操作**：查信息用 `read` / 函数库；要操作时再 `snapshot -i` 或 `find`；截图放到最后。
+- **遇到登录、验证码不要硬闯**：`bx tab activate <标签>` 把标签切到前台，请用户处理完再继续。
+
+## 2. 错误码怎么处理
+
+报错的格式是 `✗ [CODE] 说明`，下一行 `→` 后面是建议。
+
+| code | 什么情况 | 你该怎么做 |
+|---|---|---|
+| `NEED_LOGIN` | 没登录、登录过期；403 也可能是被网站拦了 | 告诉用户去浏览器里登录这个网站；用的是无头 / 专用浏览器的话，换用户日常的浏览器 |
+| `BLOCKED` | 验证码、风控、请求太频繁 | 停一停再试；有验证码就请用户在浏览器里处理（错误提示里有标签编号） |
+| `EMPTY` | 正常执行了，但没有结果 | 换关键词、放宽条件 |
+| `NOT_FOUND` | 帖子、用户、视频不存在 | 检查参数 |
+| `CHANGED` | 网站改版了，函数解析不出来 | 用 `bx read` 或 `bx run` 现场取数据，再修函数库里的那个函数 |
+| `AMBIGUOUS` | 目标元素匹配到多个 | 照着列出的候选写得更具体，或者用 snapshot 编号 |
+| `STALE_REF` / `UNKNOWN_REF` | 编号失效（页面跳转了） | 重新 `bx snapshot -i` |
+| `COVERED` | 元素被弹层挡住了 | 先关掉弹层（`bx press Escape`，或点关闭按钮） |
+| `NO_LIB` / `NO_FUNCTION` | 没有这个函数库 / 函数 | `bx lib list [域名]` 看看有什么 |
+
+## 3. 读网页
 
 ```bash
-bx site list                    # 有哪些站点；bx <站点> --help 看命令，bx <站点> <命令> --help 看参数
-bx bili search 关键词 --limit 10       bx bili rank 动画
-bx bili video info BV1xx               bx bili video comments BV1xx --limit 50
-bx bili video download BV1xx --out ./v bx bili user videos <mid>
-bx google search 关键词
-bx form fields <url>                   bx form fill <url> --file x.csv --submit 提交 --dry-run
+bx read <网址>           # 后台开标签，读完关掉；--keep 保留（输出里有标签编号）
+bx read -t t5            # 读已经打开的标签
+bx read <网址> -b        # 只看概要和分段，最省 token
+bx read -t t5 -s comments   # 展开某一段（分段 id 见输出末尾）
+bx read -t t5 --offset 6000 # 内容被截断时接着读；--limit 50 列表多取几项；--budget 20000 放宽字数
+bx read <网址> --scroll 3   # 先往下滚 3 屏再读（懒加载的评论、无限滚动的列表）
+bx read <网址> --grep '断货|限购'      # 只看命中的段落（前后各带一段）；-C 0 不带上下文，-C 2 多带点
+bx read <网址> -s comments --grep AMD # 只在评论区里找
 ```
 
-- 被程序捕获输出时默认是 JSONL，给人看时加 `-o table` 或 `-o yaml`。
+- **长文章只关心其中几件事时用 `--grep`**，比读全文省很多：它在整篇内容里按段落找（一整段不换行的中文网页按句子找），相邻命中合并成一块。关键词按正则、不分大小写。每块前面的 `〔@1304〕` 是它在全文里的位置，`bx read --offset 1304` 从那里接着读。列表页上 `--grep` 是按条目过滤。脚本里：`(await bx.read(url, { grep: /断货|限购/ })).matches` → `[{ offset, text, hits }]`。
+- `via: lib:<域名>` 表示用的是函数库里的专用读法（最准），`readability` / `list` / `outline` 是通用提取。内容不对时可以用 `--via readability|list|outline` 手动指定。
+- **输出末尾如果列出了“这个网站有函数库 …”**，要批量取数据时就用那些函数，别自己去解析页面。
+- 出现 💡 提示页面里有 `window.__INITIAL_STATE__` 这类数据时，用 `bx eval "window.__INITIAL_STATE__.xxx" -t t5` 直接拿结构化数据。
 
-### 管道（站点脚本都支持）
-
-站点脚本像 Linux 命令一样可以用 `|` 串起来：前一个命令每行输出一条 JSON，后一个命令逐条读进来，每条执行一次。
-
-- 第一个参数写 `-` 表示从 stdin 读（不写参数、又是被管道喂数据时也会自动读 stdin）。
-- 自动从每条记录里取对应字段：视频类命令取 `bvid / url / aid`，用户类命令取 `mid / owner.mid / url`，`google search` 取 `query / keyword / title`；`bx <站点> <命令> --help` 末尾会写取哪个字段。字段名对不上时用 `--field <字段名>` 指定（支持 `a.b` 这种路径）。
-- stdin 每行可以是 JSON 对象、JSON 数组（会拆开逐条处理），也可以是纯文本（整行就是参数值）。
-- `--concurrency 3` 同时处理 3 条；某条失败只在 stderr 打 `✗`，其余继续，最后退出码是 3。
-- 日志、进度走 stderr，stdout 只有数据，可以放心接 `jq`、重定向到文件。
-
-例子：
+## 4. 函数库：bx call
 
 ```bash
-# 搜索结果 → 每个视频取前 3 条热评
-bx bili search 电影解说 --limit 5 | bx bili video comments - --limit 3
-
-# 排行榜前 10 → 查每个视频的详细信息，存成 CSV
-bx bili rank 知识 --limit 10 | bx bili video info - -o csv > 知识区.csv
-
-# 搜索 → 查详情 → 用 jq 筛出播放量超过 10 万的 → 下载（2 个并发）
-bx bili search 纪录片 --limit 20 \
-  | bx bili video info - \
-  | jq -c 'select(.stat.view > 100000)' \
-  | bx bili video download - --out ./videos --concurrency 2
-
-# 排行榜 → 每个 UP 主的信息（rank 输出里有 mid，user info 自动取 mid）
-bx bili rank 动画 --limit 5 | bx bili user info -
-
-# 某 UP 主最近的投稿 → 每个视频的评论
-bx bili user videos 486906719 --limit 5 | bx bili video comments - --limit 10 -o csv > 评论.csv
-
-# 纯文本输入：一行一个 BV 号
-printf 'BV1GJ411x7h7\nBV1xx411c7mD\n' | bx bili video info -
-
-# 用 --field 明确指定取哪个字段（自动取的不对、或者记录里有多个候选时）：视频详情 → UP 主最近的投稿
-bx bili video info BV1GJ411x7h7 | bx bili user videos - --field owner.mid --limit 5
-
-# 一个文件里放多个关键词，逐个搜
-cat 关键词.txt | bx google search -
+bx lib list bilibili.com     # 站点笔记 + 每个函数的签名、说明、例子、命令行写法（第一次用某个网站先看这个）
+bx call bilibili.com search 纪录片 --limit 10
+bx call bilibili.com comments BV1GJ411x7h7 --limit 50 -o csv > 评论.csv
+bx call google.com search "sqlite production" --limit 20 --time year
+bx call bing.com search "sqlite production"        # 还有 duckduckgo.com、baidu.com（中文内容更全），参数一样
+bx call youtube.com videos @doctorx2023 --limit 200 # 频道全部视频；还有 channel / video / search
+bx call reddit.com search "sqlite production" --time year
+bx call news.ycombinator.com comments "https://news.ycombinator.com/item?id=12345"
 ```
 
-## 7. 把网站操作固化成脚本（没有现成脚本、又要反复做时）
+- **搜索引擎**：`google.com.search` 自带排队（同一个进程里的搜索一个接一个发，并行写 `Promise.allSettled` 也没事）、被人机验证拦住时等一会儿重试一次，还不行就**自动改用必应、再不行用 DuckDuckGo**（结果里 `engine` 字段标明来源，stderr 会打一行 ⚠），之后 10 分钟内直接走兜底。只要 Google 的结果就传 `--fallback false`；指定兜底顺序用 `--fallback baidu,bing`。
+- **YouTube**：`videos` 走内部翻页接口，几秒拉完几百条（含时长、播放量、发布时间、`members` 会员专享），不要自己滚动抓 DOM；`channel` 带注册日期、总播放、国家；`bx read` 打开频道页 / 视频页也会用它。评论还没做。
+- 位置参数按函数签名的顺序传，`--名字 值` 合成最后一个对象参数；`--full` 这种是开关。
+- 输出被管道或程序接走时默认是 JSONL；给人看用 `-o table` / `-o yaml`；要解析就用 `-o json`。
+- **管道**：第一个参数写 `-` 就从 stdin 一行一条地读，每条执行一次。JSON 记录默认取它的 `url` 字段（`--field mid` 指定别的字段）；`--concurrency 3` 并发；某条失败只在 stderr 打 `✗`，其余照常。
 
 ```bash
-bx trace start <名字> --goal "要拿什么数据、支持什么参数"
-bx reload                       # 页面加载时发的接口也能录到
-bx read                         # 拿到数据后一定要 read 一次（报告靠它找数据出处）
-# …… 翻页 / 切换分类 / 搜索，每次操作后再 read 一次；可以用 bx trace mark "说明" 做标注 ……
-bx trace stop                   # 生成调查报告
-bx trace digest <名字>          # 读报告，先看“结论”
-bx script new <站点> --from-trace <名字>                 # 生成骨架（附上 TRACE.md）
-bx script test <站点> <命令> [参数] --from-trace <名字>   # 验证，不通过就接着改
+bx call bilibili.com search 电影解说 --limit 5 | bx call bilibili.com comments - --limit 3
+bx call bilibili.com rank 动画 --limit 5 | bx call bilibili.com user - --field mid
+bx call news.ycombinator.com search "bun in production" -o jsonl | bx call news.ycombinator.com comments - --limit 50
 ```
 
-- 报告说有签名：用 `tab.waitResponse` 截获页面自己发的请求，按报告里的操作步骤触发；没有签名：用 `tab.fetch` 直接调。
-- 看细节：`bx trace show <名字> <请求号> --path data.list[0]`；在所有响应里搜文字：`bx trace find <名字> "文字"`。
-- 也可以让用户演示：`trace start` 之后，请用户在那个标签里手动操作一遍，再 `trace stop`。
-- 写法参考：仓库里的 `docs/sites.md`、`docs/trace.md`。
+## 5. bx run：写 JS 串起来
 
-## 原则
+代码在 Node 里执行（ES 模块）：可以用顶层 `await` 和 `import fs from 'node:fs'`，`return` 的值会打印出来。只有一个表达式时可以不写 `return`。
 
-- **多个浏览器先问用户**：`bx browser list` 有多个浏览器时，先让用户选用哪个。之后凡是要选浏览器的命令（`tab open`、`tab list`、站点脚本）都加 `--browser <名字>`。页面命令带了 `-t` 就已经确定了浏览器，不用再加。
-- **后台开标签、默认不分组**：`bx tab open <url> --bg --keep [--browser <名字>]`，不打扰用户正在看的页面，记下返回的 `id`。用户要求把标签归到某个组时，才加 `--group <组名>`。
-- **操作时都指定标签**：每条页面命令都带 `-t <id>`（如 `bx read -t t5`、`bx click e3 -t t5`），不要依赖“当前标签”，它可能被别的任务改掉。
-- 查信息先用 `read`；要操作时再用 `snapshot`；截图放到最后。
-- 不要关闭或跳转用户自己的标签，需要的话自己开新标签。
-- 用完自己开的标签要关掉：`bx tab close t5 t6`。
+```bash
+bx run 'await bx.tabs()'
+bx run -f step1.js 0,3,7     # 多出来的参数在 bx.args 里
+```
+
+```js
+// 标签
+const tab = await bx.open(url)                 // 后台新开
+const tab = await bx.tab('t5')                 // 按编号拿回之前开的标签（上次 bx run 开的也行）
+const tab = await bx.tab('reddit.com')         // 复用已打开的、网址匹配的标签（带登录状态），没有就后台新开
+await bx.cleanup()                             // 关掉这次运行自己开的标签
+
+// 取数据
+await bx.read(url, { budget: 4000 })           // → { title, content, … }，读完自动关标签
+await bx.read(url, { grep: /断货|限购/ })        // 只要命中的段落 → .matches = [{ offset, text, hits }]
+await bx.lib('reddit.com').search('x', { limit: 20 })
+await fetch('https://api.github.com/...')      // 公开接口直接用 Node 的 fetch，不用开标签
+await tab.fetch(url)                           // 在页面里发请求，带着登录状态，返回 JSON
+await tab.eval(() => document.title)           // 在页面里跑 JS（函数会被序列化，用不了外面的变量）
+await tab.eval(n => [...document.querySelectorAll('h3')].slice(0, n).map(h => h.innerText), 10)  // 参数从后面传
+
+// 接口带签名、自己发不了请求时：让页面自己翻页，接住每一页的返回
+for await (const res of tab.collect('/api/search', { more: () => tab.scroll() })) { … }
+
+// 操作（和命令行一一对应）
+await tab.click(目标)  tab.fill(目标, 文字, { submit: true })  tab.fill({ 目标: 值, … })
+tab.press('Enter')  tab.type(文字)  tab.select(目标, 选项)  tab.upload(目标, 文件)  tab.scroll()
+tab.snapshot({ interactive: true })  tab.find(文字)  tab.waitFor({ text })  tab.waitFor({ url: /issues\/\d+/ })  tab.shot({ save })  tab.close()
+bx.log(...)  bx.sleep(ms)   // 日志走 stderr，不混进结果
+```
+
+- 先试 `tab.fetch`：很多看起来带签名的接口，在页面里带着 cookie 直接请求也能用。不行再用 `collect`。
+- JS 变量在进程退出后就没了：要留的结果写文件；标签留着，下次用 `bx.tab('t5')` 拿回来。
+
+## 6. 操作页面
+
+目标元素有四种写法，所有点击、填写类命令都接受：
+
+```bash
+bx click e15 -t t5                                      # snapshot 编号（临时操作用）
+bx click "#main button.submit" -t t5                    # CSS 选择器
+bx click "getByRole('button', { name: '提交' })" -t t5  # 按角色 + 名字（写脚本时推荐）
+bx fill "getByLabel('邮箱')" a@b.com -t t5              # 还有 getByText('下一步')、getByPlaceholder('搜索')
+```
+
+```bash
+bx snapshot -i -t t5              # 可操作的元素 + 编号；不加 -i 会连文字一起显示
+bx find "加入购物车" -t t5         # 只返回匹配的那几行和编号，比整页 snapshot 省很多
+bx click <目标> -t t5             # --double --right --middle --modifiers Shift --force（被挡住也点）
+bx fill <目标> "内容" --submit -t t5
+bx fill e3=张三 e5=13800000000 e7=true -t t5    # 一次填多个：勾选框填 true/false，下拉框填选项文字
+bx select <目标> 北京 -t t5 / check <目标> / uncheck <目标> / press Enter / type "文字"
+bx upload <目标> ./a.png -t t5    # 目标可以是“点了会弹选文件窗口”的按钮
+bx click <目标> --download --save ./out -t t5   # 等下载完成，返回文件路径
+bx scroll [down|bottom|<目标>] -t t5           # 返回 atBottom
+bx wait --text 加载完成 -t t5     # 还有 --gone / --selector / --url / --fn / --idle
+bx wait --url '/issues\/\d+/' -t t5   # --url：子串 /issues/、通配 '*github.com/*/issues/*'、斜杠包起来的正则（net log / collect 的匹配也一样）
+bx mouse click 320 240 -t t5      # canvas、地图这类：坐标从 bx shot --marks 的截图上看
+bx shot --marks -t t5             # 截图，在图上标出编号
+```
+
+- 每次操作都返回 `changes`：`navigated`（页面跳转了，编号作废，要重新 snapshot）、`newTabs`（开了新标签，在后台，用 `-t <新编号>` 操作它）、`dialogs`（弹窗已自动确认）、`note`。
+- 加 `--snap` 操作完顺带返回新的 snapshot，省一次调用。
+- 页面局部重绘后编号会自动按“角色 + 名字”重新定位（结果里会注明）；页面跳转后要重新 snapshot。
+
+## 7. 跨站检索的最佳实践
+
+跨几个网站调研一个问题（“X 能不能用于生产环境”“大家怎么评价 Y”“Z 方案现在什么状况”）时，**不要一个网站一个网站地手动 `read`**。按下面的步骤做，每一步是一次 `bx run`：
+
+1. **广撒网**：几个站并行搜索。中英文网站各用对应语言的关键词。把结果规整成同一种结构 `{ site, title, url, heat, time }`，写进 `research/posts.json`。只返回“每个来源成功/失败 + 一行一条、带序号的摘要”。
+2. **挑着深挖**：看摘要按标题挑出真正相关的几条（搜索结果里总会混进跑题的帖子）。用序号作参数，拉评论或正文，写进 `research/threads.json`。文章拆成段落，关心特定问题时在脚本顶部设 `KEY`（正则），文章用 `bx.read(url, { grep })` 只取命中段落、评论也按它过滤。
+3. **一手资料**：官方文档用 `bx.read`，项目数据用公开接口（GitHub API 等）。
+4. **写结论**：每个说法后面带来源链接；分清是谁的经验、哪篇文章、官方怎么写的；矛盾的说法都列出来，写清楚各自的前提。
+5. **存下来**：现场摸通的网站写成 `~/.bx/lib/<域名>.js` 里的函数，下次直接用（见第 8 节）。
+
+几个要点：
+
+- 用 `Promise.allSettled` 并行。一个站失败（`NEED_LOGIN` / `BLOCKED`）不影响其它站，把失败原因报出来就行。多个 Google 查询也可以并行写（函数库里会排队、被拦会自动换引擎）；中文问题可以加一路 `baidu.com`。
+- PowerShell 里序号参数要加引号：`bx run -f step2.js "0,31,60"`（不加会被拆成数组）。
+- 保留各站自己的相关度顺序，不要按评论数排序（会把跑题的热帖排到前面）。
+- 拉详情时限制并发（同时 3 个左右），结束时 `await bx.cleanup()`。
+- 中间结果都写文件，所以每一步都可以单独重跑。
+
+**可以直接复制的脚本**：本 skill 目录下的 `examples/cross-site-research/`（`step1.js` 搜索汇总、`step2.js` 拉详情、`step3.js` 一手资料，`README.md` 是说明）。三个脚本都在真实浏览器里跑通过（HN + Reddit + B 站 + Google）。复制到工作目录，改脚本顶部的关键词就能用：
+
+```bash
+bx run -f step1.js              # → 来源状态 + 带序号的摘要
+bx run -f step2.js 0,31,60,80   # → 挑中的几条的评论 / 正文
+bx run -f step3.js
+```
+
+## 8. 把摸通的网站存成函数库
+
+```
+第一次遇到 → bx read <网址> 看一眼
+不够用     → bx run 里试：tab.eval 看页面数据、bx net log --api -t t5 找接口、tab.fetch 调一下
+试通了     → 改成函数，存进 ~/.bx/lib/<域名>.js
+```
+
+```js
+// ~/.bx/lib/example.com.js
+/* 站点笔记：接口在哪、字段什么意思、有什么坑（bx lib list 时显示；下次来修先看它） */
+
+/** 一行说明
+ *  @example search('关键词', { limit: 20 }) */
+export async function search(q, { limit = 20 } = {}) {
+  const tab = await bx.tab('example.com')
+  const j = await tab.fetch(`https://example.com/api/search?q=${encodeURIComponent(q)}`)
+  if (!Array.isArray(j.items)) throw new BxError('CHANGED', '搜索接口的返回结构变了', '去修 search')
+  if (!j.items.length) throw new BxError('EMPTY', `没有搜到 ${q}`, '换个关键词')
+  return j.items.slice(0, limit).map(x => ({ title: x.title, url: x.url }))   // 返回数组，每项带 url
+}
+
+/** 可选：有这个函数时 bx read 会优先用它；处理不了的页面返回 null */
+export async function read(tab) { … }
+```
+
+- 参数类型看默认值（`limit = 20` 是数字，`full = false` 是开关），不用另外声明；全局有 `bx` 和 `BxError`，不用 import。
+- 函数库里定位元素用 CSS 或 `getByRole(...)`，不要用编号（页面一变编号就变）；自己开的标签在 `finally` 里关掉。
+- 动手之前先看看 [OpenCLI](https://github.com/jackwener/opencli) 的 `clis/<站点>/` 有没有现成实现：它的 `page.goto` / `page.evaluate` 对应 `tab.goto` / `tab.eval`。
+- 详细写法见仓库里的 `docs/lib.md`。想录下一次操作、自动分析数据来自哪个接口：`bx trace start --goal "…"` … `bx trace stop`，见 `docs/trace.md`。

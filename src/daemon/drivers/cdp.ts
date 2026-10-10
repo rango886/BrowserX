@@ -19,6 +19,7 @@ export class CdpDriver implements Driver {
   private cdpHandlers: CdpEventHandler[] = []
   private goneHandlers: ((id: string, reason: string) => void)[] = []
   private closeHandlers: (() => void)[] = []
+  private rootHandlers: ((method: string, params: any) => void)[] = []
   child?: ReturnType<typeof spawn>
 
   name: string
@@ -78,7 +79,38 @@ export class CdpDriver implements Driver {
     if (sessionId) {
       const tid = this.sessionTargets.get(sessionId)
       if (tid) this.cdpHandlers.forEach(h => h(tid, method, params))
+    } else this.rootHandlers.forEach(h => h(method, params))
+  }
+
+  /**
+   * 准备接住下一个下载（先调用它，再触发点击）。下载先放到 dir 里（文件名是 guid），完成后返回路径和建议的文件名
+   */
+  async expectDownload(dir: string, timeout = 120_000): Promise<{ done: Promise<{ file: string; url: string; name: string }> }> {
+    ensureDir(dir)
+    await this.raw('Browser.setDownloadBehavior', { behavior: 'allowAndName', downloadPath: dir, eventsEnabled: true })
+    let begin: any
+    let h: (m: string, p: any) => void
+    const done = new Promise<{ file: string; url: string; name: string }>((resolve, reject) => {
+      const t = setTimeout(() => reject(new BxError('TIMEOUT', `等下载超时 (${timeout}ms)`, begin ? '下载开始了但没完成，文件可能很大' : '点击后没有开始下载')), timeout)
+      h = (m, p) => {
+        if (m === 'Browser.downloadWillBegin' && !begin) begin = p
+        if (m !== 'Browser.downloadProgress' || !begin || p.guid !== begin.guid) return
+        if (p.state === 'completed') {
+          clearTimeout(t)
+          resolve({ file: path.join(dir, begin.guid), url: begin.url, name: begin.suggestedFilename || begin.guid })
+        } else if (p.state === 'canceled') {
+          clearTimeout(t)
+          reject(new BxError('DOWNLOAD_FAILED', '下载被取消了'))
+        }
+      }
+      this.rootHandlers.push(h)
+    })
+    const cleanup = () => {
+      this.rootHandlers = this.rootHandlers.filter(x => x !== h)
+      this.raw('Browser.setDownloadBehavior', { behavior: 'default' }).catch(() => {})
     }
+    done.then(cleanup, cleanup)
+    return { done }
   }
 
   private raw(method: string, params: any = {}, sessionId?: string): Promise<any> {

@@ -1,14 +1,16 @@
 import http from 'node:http'
 import fs from 'node:fs'
+import path from 'node:path'
 import crypto from 'node:crypto'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { Driver, TabInfo } from './types.ts'
-import { TabSession } from './session.ts'
+import { TabSession, netMatcher } from './session.ts'
 import { CdpDriver, launchBrowser } from './drivers/cdp.ts'
 import { ExtensionDriver } from './drivers/extension.ts'
 import { snapshot } from './snapshot.ts'
 import * as act from './actions.ts'
-import { read, loadReaders } from './read.ts'
+import { read } from './read.ts'
+import { resolveTarget } from './locate.ts'
 import { Trace, DESCRIBE_FN, listTraces, traceDir } from './trace.ts'
 import { digestTrace } from '../trace/digest.ts'
 import { BX_HOME, DAEMON_FILE, DEFAULT_PORT, ensureDir, readConfig } from '../common/paths.ts'
@@ -134,15 +136,17 @@ function session(id?: string): TabSession {
 // 操作后的"变化摘要"：让 AI 不用每次都重新 snapshot 才知道发生了什么
 // =====================================================================
 
-async function withChanges<T>(s: TabSession, fn: () => Promise<T>, opts: { settle?: boolean } = {}) {
+async function withChanges<T>(s: TabSession, fn: () => Promise<T>, opts: { settle?: boolean; snap?: boolean } = {}) {
   await s.ensure('Page')
   const d = s.driver
+  s.notes = []
+  const tabsBefore = await d.listTabs().catch(() => [])
   const before = {
     url: await s.evaluate('location.href').catch(() => ''),
     title: await s.evaluate('document.title').catch(() => ''),
     nav: s.navCount,
     dialogs: s.dialogs.length,
-    tabs: new Set((await d.listTabs().catch(() => [])).map(t => t.nativeId)),
+    tabs: new Set(tabsBefore.map(t => t.nativeId)),
   }
   const result = await fn()
   if (opts.settle !== false) await s.settle(6000)
@@ -159,10 +163,45 @@ async function withChanges<T>(s: TabSession, fn: () => Promise<T>, opts: { settl
   if (s.dialogs.length > before.dialogs) changes.dialogs = s.dialogs.slice(before.dialogs).map(x => `${x.type}: ${x.message} (${x.handled})`)
   const after = await d.listTabs().catch(() => [])
   const fresh = after.filter(t => !before.tabs.has(t.nativeId))
-  if (fresh.length) changes.newTabs = fresh.map(t => ({ id: shortFor(d.name, t.nativeId), url: t.url }))
-  if (changes.navigated) changes.note = '页面已跳转，之前的 ref 失效，需要重新 snapshot'
-  if (fresh.length) changes.note = (changes.note ? changes.note + '；' : '') + `打开了新标签，用 \`bx tab use ${changes.newTabs[0].id}\` 切过去`
-  return { ok: true, ...(result as any), changes: Object.keys(changes).length ? changes : undefined }
+  if (fresh.length) {
+    changes.newTabs = fresh.map(t => ({ id: shortFor(d.name, t.nativeId), url: t.url }))
+    // 点击开出来的新标签会抢到前台：把原来的标签切回去，不打扰用户（插件模式）
+    if (d.kind === 'extension')
+      for (const t of fresh.filter(t => t.active)) {
+        const prev = tabsBefore.find(x => x.active && x.windowId === t.windowId)
+        if (prev) await (d as ExtensionDriver).ext('tabs.activate', { tabId: Number(prev.nativeId), focus: false }).catch(() => {})
+      }
+  }
+  const notes = [...s.notes]
+  if (changes.navigated) notes.push('页面已跳转，之前的编号失效，需要重新 snapshot')
+  if (fresh.length) notes.push(`开了新标签 ${changes.newTabs.map((t: any) => t.id).join(' ')}（在后台），用 -t ${changes.newTabs[0].id} 操作它`)
+  if (notes.length) changes.note = notes.join('；')
+  const out: any = { ok: true, ...(result as any), changes: Object.keys(changes).length ? changes : undefined }
+  if (opts.snap) out.snapshot = (await snapshot(s, { interactive: true }).catch((e: any) => ({ text: `(snapshot 失败：${e.message})` }))).text
+  return out
+}
+
+/** 准备接住下一个下载：CDP 模式用 Browser.setDownloadBehavior，插件模式用 chrome.downloads */
+async function expectDownload(d: Driver) {
+  if (d.kind === 'cdp') return (d as CdpDriver).expectDownload(path.join(BX_HOME, 'downloads', '.incoming'))
+  return (d as ExtensionDriver).expectDownload()
+}
+
+/** 下载完的文件搬到目标目录（重名就加序号） */
+function placeDownload(r: { file: string; url: string; name: string }, dir: string | undefined, kind: string) {
+  if (!dir && kind !== 'cdp') return { file: r.file, url: r.url, size: fs.statSync(r.file).size }
+  const target = ensureDir(dir || path.join(BX_HOME, 'downloads'))
+  const safe = r.name.replace(/[\\/:*?"<>|]/g, '_') || 'download'
+  const ext = path.extname(safe)
+  let dest = path.join(target, safe)
+  for (let i = 1; fs.existsSync(dest); i++) dest = path.join(target, `${path.basename(safe, ext)} (${i})${ext}`)
+  try {
+    fs.renameSync(r.file, dest)
+  } catch {
+    fs.copyFileSync(r.file, dest)
+    fs.rmSync(r.file, { force: true })
+  }
+  return { file: dest, url: r.url, size: fs.statSync(dest).size }
 }
 
 // =====================================================================
@@ -268,6 +307,8 @@ const methods: Record<string, Handler> = {
     }
     if (!keep) currentTab = id
     const s = session(id)
+    // 后台标签会被浏览器降速（定时器变慢、没有焦点），懒加载可能不动：让页面以为自己有焦点
+    if (background && !process.env.BX_NO_FOCUS_EMULATION) await s.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {})
     if (trace) await trace.addTab(s, 'newtab')
     if (url && url !== 'about:blank') await act.goto(s, url).catch(e => log('open', e.message))
     const finalUrl = await s.evaluate('location.href').catch(() => url)
@@ -363,8 +404,13 @@ const methods: Record<string, Handler> = {
     const t = tabRef(tab)
     return act.screenshot(session(tab), o, () => t.driver.activateTab(t.nativeId))
   },
-  'page.eval': async ({ tab, code, world }) => {
+  'page.eval': async ({ tab, code, world, target }) => {
     const s = session(tab)
+    if (target) {
+      // 在某个元素上执行：code 是一个函数，参数就是这个元素
+      const bid = await resolveTarget(s, target)
+      return { value: await s.callOn(bid, `async function(){ const __f = (${code}\n); return typeof __f === 'function' ? await __f(this) : __f }`) }
+    }
     if (world === 'isolated') {
       // 隔离环境：和页面共享 DOM，但看不到页面的 JS 变量，页面也看不到我们
       const { frameTree } = await s.send('Page.getFrameTree')
@@ -406,32 +452,97 @@ const methods: Record<string, Handler> = {
   },
 
   // ---------- 页面：交互 ----------
-  'page.click': async ({ tab, ref, double, right, force }) => {
+  'page.click': async ({ tab, ref, double, right, middle, modifiers, force, download, save, timeout, snap }) => {
     const s = session(tab)
-    return withChanges(s, async () => (await act.click(s, ref, { double, right, force }), {}))
+    const o = { double, right, middle, modifiers, force }
+    if (!download) return withChanges(s, async () => (await act.click(s, ref, o), {}), { snap })
+    const exp = await expectDownload(s.driver)
+    return withChanges(
+      s,
+      async () => {
+        await act.click(s, ref, o)
+        const r = await (timeout ? Promise.race([exp.done, sleep(timeout).then(() => Promise.reject(new BxError('TIMEOUT', `等下载超时 (${timeout}ms)`)))]) : exp.done)
+        return { download: placeDownload(r, save, s.driver.kind) }
+      },
+      { snap },
+    )
   },
-  'page.hover': async ({ tab, ref }) => withChanges(session(tab), async () => (await act.hover(session(tab), ref), {})),
-  'page.fill': async ({ tab, ref, text, append, submit }) => {
+  'page.hover': async ({ tab, ref, snap }) => withChanges(session(tab), async () => (await act.hover(session(tab), ref), {}), { snap }),
+  'page.fill': async ({ tab, ref, text, append, submit, snap }) => {
     const s = session(tab)
-    return withChanges(s, () => act.fill(s, ref, text, { append, submit }), { settle: !!submit })
+    return withChanges(s, () => act.fill(s, ref, text, { append, submit }), { settle: !!submit, snap })
   },
-  'page.press': async ({ tab, keys }) => {
+  'page.fillMany': async ({ tab, fields, snap }) => {
     const s = session(tab)
-    return withChanges(s, async () => {
-      for (const k of keys) await act.press(s, k)
+    return withChanges(s, () => act.fillMany(s, fields), { settle: false, snap })
+  },
+  'page.press': async ({ tab, keys, snap }) => {
+    const s = session(tab)
+    return withChanges(
+      s,
+      async () => {
+        for (const k of keys) await act.press(s, k)
+        return {}
+      },
+      { snap },
+    )
+  },
+  'page.type': async ({ tab, text, submit, snap }) => {
+    const s = session(tab)
+    const run = async () => {
+      await act.typeText(s, text)
+      if (submit) await act.press(s, 'Enter')
       return {}
-    })
+    }
+    if (!submit && !snap) return run().then(() => ({ ok: true }))
+    return withChanges(s, run, { settle: !!submit, snap })
   },
-  'page.type': async ({ tab, text }) => {
-    const s = session(tab)
-    await s.send('Input.insertText', { text })
-    return { ok: true }
-  },
-  'page.select': async ({ tab, ref, values }) => withChanges(session(tab), () => act.selectOption(session(tab), ref, values)),
-  'page.check': async ({ tab, ref, value = true }) => withChanges(session(tab), () => act.check(session(tab), ref, value)),
-  'page.upload': async ({ tab, ref, files }) => withChanges(session(tab), () => act.upload(session(tab), ref, files)),
-  'page.drag': async ({ tab, from, to }) => withChanges(session(tab), async () => (await act.drag(session(tab), from, to), {})),
+  'page.select': async ({ tab, ref, values, snap }) => withChanges(session(tab), () => act.selectOption(session(tab), ref, values), { snap }),
+  'page.check': async ({ tab, ref, value = true, snap }) => withChanges(session(tab), () => act.check(session(tab), ref, value), { snap }),
+  'page.upload': async ({ tab, ref, files, snap }) => withChanges(session(tab), () => act.upload(session(tab), ref, files), { snap }),
+  'page.drag': async ({ tab, from, to, snap }) => withChanges(session(tab), async () => (await act.drag(session(tab), from, to), {}), { snap }),
   'page.scroll': async ({ tab, ref, dir, amount }) => act.scroll(session(tab), { ref, dir, amount }),
+  'input.mouse': async ({ tab, snap, ...o }) => {
+    const s = session(tab)
+    return withChanges(s, () => act.mouseAction(s, o as any), { settle: o.action === 'click' || o.action === 'up', snap })
+  },
+  'input.key': async ({ tab, action, key }) => act.keyAction(session(tab), action, key),
+  /** 在 snapshot 里搜一段文字，只返回匹配的那几行和编号 */
+  'page.find': async ({ tab, text, max = 30 }) => {
+    const s = session(tab)
+    const snap = await snapshot(s, { maxLines: 5000 })
+    const lines = snap.text.split('\n').filter(l => /^\s*- /.test(l))
+    const want = String(text).toLowerCase()
+    const indent = (l: string) => l.match(/^\s*/)![0].length
+    const out: string[] = []
+    const refs: string[] = []
+    let n = 0
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].toLowerCase().includes(want)) continue
+      if (++n > max) continue
+      const line = lines[i].trim()
+      out.push(line)
+      const own = line.match(/\[ref=(e\d+)/)?.[1]
+      if (own) refs.push(own)
+      else {
+        // 自己没有编号（普通文字）：往上找最近一个有编号的祖先
+        let lim = indent(lines[i])
+        for (let j = i - 1; j >= 0 && lim > 0; j--) {
+          if (indent(lines[j]) >= lim) continue
+          lim = indent(lines[j])
+          const r = lines[j].match(/\[ref=(e\d+)/)?.[1]
+          if (r) {
+            out.push(`    ↑ 在 ${lines[j].trim()} 里`)
+            refs.push(r)
+            break
+          }
+        }
+      }
+    }
+    if (!n) return { text: `没有找到 "${text}"（可能要先滚动 / 展开，或者在跨域 iframe 里）`, refs }
+    const head = `找到 ${n} 处 "${text}"${n > max ? `（只列出前 ${max} 处）` : ''}：`
+    return { text: [head, ...out].join('\n'), refs }
+  },
 
   // ---------- 注入 ----------
   'inject.add': async ({ tab, source, label, now = true }) => {
@@ -511,6 +622,35 @@ const methods: Record<string, Handler> = {
     s.net.clear()
     return { ok: true }
   },
+  /** 现在的请求序号（给 tab.collect 当起点）；顺便开启网络记录 */
+  'net.mark': async ({ tab }) => {
+    const s = session(tab)
+    await s.ensure('Network')
+    return { seq: s.netSeq }
+  },
+  /** 序号大于 after 的、已经完成的匹配请求，带响应体 */
+  'net.since': async ({ tab, match, after = 0, body = true, max = 20 }) => {
+    const s = session(tab)
+    await s.ensure('Network')
+    const m = netMatcher(match)
+    const hits = s.netOrder.filter(e => e.id > after && e.done && !e.failed && m(e)).slice(0, max)
+    const items: any[] = []
+    for (const e of hits) {
+      const x: any = { id: e.id, url: e.url, method: e.method, status: e.status, type: e.type }
+      if (body) {
+        const b = await s.responseBody(e).catch(err => ({ body: `(${err.message})`, base64: false }))
+        if (b.base64) x.body = `(二进制 ${Math.round((b.body.length * 3) / 4)} 字节)`
+        else
+          try {
+            x.json = JSON.parse(b.body)
+          } catch {
+            x.body = b.body
+          }
+      }
+      items.push(x)
+    }
+    return { items, seq: s.netSeq }
+  },
   'net.route.add': async ({ tab, pattern, action, status, body, contentType, headers }) => {
     const s = session(tab)
     const r = { id: ++s.routeSeq, pattern, action, status, body, contentType, headers, hits: 0 }
@@ -532,10 +672,6 @@ const methods: Record<string, Handler> = {
     const u = url || (await s.evaluate('location.href'))
     const r = await s.send('Network.getCookies', { urls: [u] })
     return r.cookies.map((c: any) => ({ name: c.name, value: c.value, domain: c.domain, path: c.path, expires: c.expires, httpOnly: c.httpOnly, secure: c.secure }))
-  },
-  'reader.list': async ({ cwd }) => {
-    const { readers, errors } = await loadReaders(cwd)
-    return { readers: readers.map(r => ({ name: r.name, scope: r.scope, match: r.meta.match, file: r.file, description: r.meta.description })), errors: errors.length ? errors : undefined }
   },
   'cdp.send': async ({ tab, method, params }) => session(tab).send(method, params),
 
@@ -572,7 +708,7 @@ const methods: Record<string, Handler> = {
     trace = null
     const r = await t.stop()
     const report = digestTrace(r.dir)
-    return { ...r, report: report.file, next: `bx trace digest ${r.name}   # 查看调查报告；写脚本：bx script new <站点名> --from-trace ${r.name}` }
+    return { ...r, report: report.file, next: `bx trace digest ${r.name}   # 查看调查报告；摸清楚以后把取数据的代码写成 ~/.bx/lib/<域名>.js 里的函数` }
   },
   'trace.list': async () => listTraces(),
   'trace.rm': async ({ name }) => {
@@ -587,8 +723,8 @@ const methods: Record<string, Handler> = {
 // =====================================================================
 
 let trace: Trace | null = null
-const TRACED_ACTIONS = new Set(['page.goto', 'page.back', 'page.forward', 'page.reload', 'page.click', 'page.hover', 'page.fill', 'page.press', 'page.type', 'page.select', 'page.check', 'page.upload', 'page.drag', 'page.scroll', 'page.wait', 'tab.open', 'tab.use', 'page.fetch'])
-const TRACED_OBS = new Set(['page.read', 'page.snapshot', 'page.eval', 'net.show', 'net.wait'])
+const TRACED_ACTIONS = new Set(['page.goto', 'page.back', 'page.forward', 'page.reload', 'page.click', 'page.hover', 'page.fill', 'page.fillMany', 'page.press', 'page.type', 'page.select', 'page.check', 'page.upload', 'page.drag', 'page.scroll', 'page.wait', 'input.mouse', 'input.key', 'tab.open', 'tab.use', 'page.fetch'])
+const TRACED_OBS = new Set(['page.read', 'page.snapshot', 'page.eval', 'page.find', 'net.show', 'net.wait'])
 
 async function traced(method: string, p: any, h: Handler) {
   const t = trace!
@@ -599,12 +735,12 @@ async function traced(method: string, p: any, h: Handler) {
       await t.addTab(s, 'auto')
     } catch {}
   }
-  const describe = async (ref?: string) => (s && ref ? s.callOn(s.resolveRef(ref), DESCRIBE_FN).catch(() => undefined) : undefined)
+  const describe = async (ref?: string) => (s && ref ? resolveTarget(s, ref, { timeout: 0 }).then(bid => s!.callOn(bid, DESCRIBE_FN)).catch(() => undefined) : undefined)
   const target = await describe(p.ref || p.from)
   const toTarget = p.to ? await describe(p.to) : undefined
   const short = method.replace(/^page\./, '')
   const args: any = {}
-  for (const k of ['url', 'ref', 'text', 'keys', 'values', 'value', 'files', 'dir', 'selector', 'fn', 'match', 'id', 'section', 'via', 'mode', 'code', 'init', 'submit', 'from', 'to']) if (p[k] !== undefined) args[k] = p[k]
+  for (const k of ['url', 'ref', 'text', 'keys', 'values', 'value', 'files', 'dir', 'selector', 'fn', 'match', 'id', 'section', 'via', 'mode', 'code', 'init', 'submit', 'from', 'to', 'target', 'fields', 'action', 'x', 'y', 'key']) if (p[k] !== undefined) args[k] = p[k]
   if (s) s.acting++
   const t0 = t.rel() // 记操作开始的时间，这样它触发的请求排在它后面
   try {

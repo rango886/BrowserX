@@ -55,6 +55,7 @@ export async function snapshot(s: TabSession, opts: SnapshotOpts = {}) {
 
   const { nodes } = (await s.send('Accessibility.getFullAXTree', {})) as { nodes: AXNode[] }
   const byId = new Map(nodes.map(n => [n.nodeId, n]))
+  const sameName = axIndex(nodes)
   const clickable = await findClickables(s).catch(() => new Map<number, string>())
 
   // 同进程的 iframe：取它们的 AX 树，挂到对应的 Iframe 节点下面
@@ -183,7 +184,12 @@ export async function snapshot(s: TabSession, opts: SnapshotOpts = {}) {
     let line = `${'  '.repeat(depth)}- ${role}`
     if (name) line += ` "${clip(name, 120)}"`
     const props = propStr(n)
-    if (interactive && n.backendDOMNodeId) props.unshift('ref=' + s.refFor(n.backendDOMNodeId))
+    if (interactive && n.backendDOMNodeId) {
+      // 主页面里的元素记下“角色 + 名字 + 第几个”，页面局部重绘后靠它重新找回来
+      const list = n.nodeId.includes('@') ? undefined : sameName.get(axKey(role, name))
+      const nth = list ? list.indexOf(n.backendDOMNodeId) : -1
+      props.unshift('ref=' + s.refFor(n.backendDOMNodeId, nth >= 0 ? { role, name, nth } : undefined))
+    }
     if (props.length) line += ` [${props.join(', ')}]`
     const val = n.value?.value
     if (val !== undefined && val !== '' && role !== 'link' && val !== name) line += `: ${clip(String(val), 120)}`
@@ -239,8 +245,24 @@ function hasInteractive(n: AXNode, byId: Map<string, AXNode>, depth = 0): boolea
   })
 }
 
-/**
- * 找"看起来能点"的普通元素：鼠标是手型、自己和祖先 / 子孙都不是标准交互元素。
+export const axKey = (role: string, name: string) => role + '\u0000' + name.trim()
+
+/** 角色 + 名字 → 按文档顺序排列的 backendNodeId（用来算“第几个同名元素”） */
+export function axIndex(nodes: AXNode[]) {
+  const m = new Map<string, number[]>()
+  for (const n of nodes) {
+    if (n.ignored || !n.backendDOMNodeId) continue
+    const k = axKey(n.role?.value || '', n.name?.value || '')
+    const list = m.get(k) || m.set(k, []).get(k)!
+    if (!list.includes(n.backendDOMNodeId)) list.push(n.backendDOMNodeId)
+  }
+  return m
+}
+
+export type { AXNode }
+export { INTERACTIVE }
+
+/**：鼠标是手型、自己和祖先 / 子孙都不是标准交互元素。
  * 返回 backendNodeId -> 文字
  */
 async function findClickables(s: TabSession): Promise<Map<number, string>> {

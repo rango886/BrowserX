@@ -5,9 +5,16 @@ import { RpcClient, readDaemonInfo } from '../common/rpc.ts'
 import { BX_HOME, REPO_ROOT } from '../common/paths.ts'
 import { BxError, sleep } from '../common/util.ts'
 import { render, type Format } from './output.ts'
-import { listSites, loadSite, runSite, siteHelp } from './sites.ts'
-import { traceDirOf, scriptNew, scriptTest } from './script.ts'
+import { runCode } from './run.ts'
+import { runCall, libList } from './call.ts'
+import { createBx } from '../sdk/index.ts'
 import { digestTrace, showRequest, findInTrace } from '../trace/digest.ts'
+
+function traceDirOf(name: string) {
+  const d = path.join(BX_HOME, 'traces', name)
+  if (!fs.existsSync(path.join(d, 'trace.json'))) throw new BxError('NO_TRACE', `没有 trace ${name}`, '`bx trace list` 查看已有的录制')
+  return d
+}
 
 type Opt = { type: 'string' | 'boolean'; short?: string; desc?: string; multiple?: boolean }
 interface Cmd {
@@ -19,8 +26,29 @@ interface Cmd {
 }
 
 const tabOpt: Record<string, Opt> = {}
+const snapOpt: Record<string, Opt> = { snap: { type: 'boolean', desc: '操作完顺带返回新的 snapshot（只含可操作元素）' } }
+const TARGET = '<目标>'
 const num = (v: any) => (v === undefined ? undefined : Number(v))
 const call = (method: string, params: any = {}) => async (_: string[], o: any, rpc: () => Promise<RpcClient>) => (await rpc()).call(method, { tab: o.tab, ...params })
+
+/** fill 的多字段写法 e3=张三：找不在括号 / 引号里的第一个 = */
+function splitAssign(s: string): [string, string] | null {
+  let depth = 0
+  let q = ''
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (q) {
+      if (c === '\\') i++
+      else if (c === q) q = ''
+      continue
+    }
+    if (c === '"' || c === "'" || c === '`') q = c
+    else if ('([{'.includes(c)) depth++
+    else if (')]}'.includes(c)) depth--
+    else if (c === '=' && depth === 0 && i > 0) return [s.slice(0, i), s.slice(i + 1)]
+  }
+  return null
+}
 
 function readCode(pos: string[], o: any): string {
   if (o.file) return fs.readFileSync(o.file, 'utf8')
@@ -147,7 +175,8 @@ const COMMANDS: Record<string, Cmd> = {
     run: async (_, o, rpc) => (await rpc()).call('page.snapshot', { tab: o.tab, interactive: o.interactive, max: num(o.max) }),
   },
   read: {
-    summary: '读页面主要内容（正文 / 列表 / 大纲），只想知道页面有什么信息时用它',
+    args: '[网址]',
+    summary: '读页面主要内容（正文 / 列表 / 大纲）。给网址就后台开标签读完关掉，不给就读 -t 标签；有函数库的 read 就用它，末尾列出这个网站的函数',
     kind: 'read',
     opts: {
       brief: { type: 'boolean', short: 'b', desc: '只看概要和分段' },
@@ -156,36 +185,52 @@ const COMMANDS: Record<string, Cmd> = {
       offset: { type: 'string', desc: '从第几个字符 / 第几项开始' },
       limit: { type: 'string', desc: '列表项数' },
       budget: { type: 'string', desc: '内容字数上限（默认 6000）' },
-      via: { type: 'string', desc: '指定提取方式：reader 名 | readability | list | outline' },
+      via: { type: 'string', desc: '指定提取方式：lib | readability | list | outline' },
       links: { type: 'boolean', desc: '正文里保留链接地址' },
       scroll: { type: 'string', desc: '读之前向下滚动几屏（懒加载内容）' },
+      keep: { type: 'boolean', desc: '给了网址时，读完不关标签（输出里有标签编号）' },
+      grep: { type: 'string', short: 'g', desc: "只看匹配的段落（带上下文），正则、不分大小写：--grep '断货|限购'；配合 --section 可以只搜评论区" },
+      context: { type: 'string', short: 'C', desc: 'grep 时前后各带几段 / 几句（默认 1）' },
+      browser: { type: 'string', desc: '给了网址时在哪个浏览器里开' },
     },
-    run: async (_, o, rpc) =>
-      (await rpc()).call('page.read', {
-        tab: o.tab,
-        mode: o.brief ? 'brief' : o.full ? 'full' : 'default',
-        section: o.section,
-        offset: num(o.offset),
-        limit: num(o.limit),
-        budget: num(o.budget),
-        via: o.via,
-        links: o.links,
-        scroll: num(o.scroll),
-        cwd: process.cwd(),
-      }),
+    run: async (p, o) => {
+      const bx = createBx({ tab: o.tab, browser: o.browser })
+      try {
+        const r = await bx.read(p[0], {
+          mode: o.brief ? 'brief' : o.full ? 'full' : 'default',
+          section: o.section,
+          offset: num(o.offset),
+          limit: num(o.limit),
+          budget: num(o.budget),
+          via: o.via,
+          links: o.links,
+          scroll: num(o.scroll),
+          keep: o.keep,
+          grep: o.grep,
+          context: num(o.context),
+        })
+        if (p[0] && !o.keep) delete r.tab
+        return r
+      } finally {
+        bx.close()
+      }
+    },
   },
   shot: {
-    args: '[ref]',
-    summary: '截图，返回图片路径（给 ref 就只截那个元素）',
+    args: '[目标]',
+    summary: '截图，返回图片路径（给目标就只截那个元素）',
     opts: { full: { type: 'boolean', desc: '整页' }, marks: { type: 'boolean', short: 'm', desc: '在图上标出 ref 编号' }, save: { type: 'string', desc: '保存路径' } },
-    run: async (p, o, rpc) => (await rpc()).call('page.shot', { tab: o.tab, ref: p[0], full: o.full, marks: o.marks, out: o.save }),
+    run: async (p, o, rpc) => (await rpc()).call('page.shot', { tab: o.tab, ref: p[0], full: o.full, marks: o.marks, out: o.save && path.resolve(o.save) }),
   },
   eval: {
-    args: '<code>',
-    summary: '在页面里执行 JS（支持 await），返回结果',
-    opts: { file: { type: 'string', short: 'f' }, isolated: { type: 'boolean', desc: '在隔离环境执行（插件模式，不被页面察觉）' } },
+    args: '<code> [目标]',
+    summary: '在页面里执行 JS（支持 await），返回结果；给了目标时 code 是函数，参数是那个元素：bx eval "el => el.href" e5',
+    opts: { file: { type: 'string', short: 'f' }, target: { type: 'string', desc: '在哪个元素上执行' }, isolated: { type: 'boolean', desc: '在隔离环境执行（插件模式，不被页面察觉）' } },
     run: async (p, o, rpc) => {
-      const r = await (await rpc()).call('page.eval', { tab: o.tab, code: readCode(p, o), world: o.isolated ? 'isolated' : undefined })
+      let target = o.target
+      let pos = p
+      if (!target && !o.file && p.length === 2) [pos, target] = [[p[0]], p[1]]
+      const r = await (await rpc()).call('page.eval', { tab: o.tab, code: readCode(pos, o), target, world: o.isolated ? 'isolated' : undefined })
       return r.value
     },
   },
@@ -203,39 +248,102 @@ const COMMANDS: Record<string, Cmd> = {
 
   // ---------------- 交互 ----------------
   click: {
-    args: '<ref>',
-    summary: '点击元素',
-    opts: { double: { type: 'boolean' }, right: { type: 'boolean' }, force: { type: 'boolean', desc: '被挡住也点' } },
-    run: async (p, o, rpc) => (await rpc()).call('page.click', { tab: o.tab, ref: p[0], double: o.double, right: o.right, force: o.force }),
+    args: TARGET,
+    summary: '点击元素。目标可以是编号 e15、CSS 选择器、getByRole(\'button\', { name: \'提交\' }) / getByLabel(...) / getByText(...)',
+    opts: {
+      double: { type: 'boolean' },
+      right: { type: 'boolean' },
+      middle: { type: 'boolean', desc: '中键（一般是新标签打开链接）' },
+      modifiers: { type: 'string', desc: '按住修饰键点，如 Shift,Control' },
+      force: { type: 'boolean', desc: '被挡住也点' },
+      download: { type: 'boolean', desc: '等这次点击触发的下载完成，返回文件路径' },
+      save: { type: 'string', desc: '下载存到哪个目录（配合 --download）' },
+      timeout: { type: 'string', desc: '等下载的毫秒数（默认 120000）' },
+      ...snapOpt,
+    },
+    run: async (p, o, rpc) =>
+      (await rpc()).call('page.click', {
+        tab: o.tab, ref: p.join(' '), double: o.double, right: o.right, middle: o.middle, modifiers: o.modifiers, force: o.force,
+        download: o.download || !!o.save, save: o.save && path.resolve(o.save), timeout: num(o.timeout), snap: o.snap,
+      }),
   },
-  hover: { args: '<ref>', summary: '鼠标悬停', run: async (p, o, rpc) => (await rpc()).call('page.hover', { tab: o.tab, ref: p[0] }) },
+  hover: { args: TARGET, summary: '鼠标悬停', opts: { ...snapOpt }, run: async (p, o, rpc) => (await rpc()).call('page.hover', { tab: o.tab, ref: p.join(' '), snap: o.snap }) },
   fill: {
-    args: '<ref> <text>',
-    summary: '清空输入框再填入文字（--submit 填完按回车）',
-    opts: { append: { type: 'boolean', desc: '不清空，追加' }, submit: { type: 'boolean' } },
-    run: async (p, o, rpc) => (await rpc()).call('page.fill', { tab: o.tab, ref: p[0], text: p.slice(1).join(' '), append: o.append, submit: o.submit }),
-  },
-  type: { args: '<text>', summary: '往当前焦点处输入文字', run: async (p, o, rpc) => (await rpc()).call('page.type', { tab: o.tab, text: p.join(' ') }) },
-  press: { args: '<keys...>', summary: '按键，如 Enter / Control+A / Escape', run: async (p, o, rpc) => (await rpc()).call('page.press', { tab: o.tab, keys: p }) },
-  select: { args: '<ref> <values...>', summary: '下拉框选择（按值或文字）', run: async (p, o, rpc) => (await rpc()).call('page.select', { tab: o.tab, ref: p[0], values: p.slice(1) }) },
-  check: { args: '<ref>', summary: '勾选', run: async (p, o, rpc) => (await rpc()).call('page.check', { tab: o.tab, ref: p[0], value: true }) },
-  uncheck: { args: '<ref>', summary: '取消勾选', run: async (p, o, rpc) => (await rpc()).call('page.check', { tab: o.tab, ref: p[0], value: false }) },
-  upload: { args: '<ref> <files...>', summary: '给文件输入框设置文件', run: async (p, o, rpc) => (await rpc()).call('page.upload', { tab: o.tab, ref: p[0], files: p.slice(1) }) },
-  drag: { args: '<from> <to>', summary: '拖拽', run: async (p, o, rpc) => (await rpc()).call('page.drag', { tab: o.tab, from: p[0], to: p[1] }) },
-  scroll: {
-    args: '[down|up|top|bottom|<ref>]',
-    summary: '滚动（默认向下一屏），返回滚动位置和是否到底',
-    opts: { amount: { type: 'string', desc: '像素' } },
+    args: `${TARGET} <text>  |  e3=张三 e5=138… e7=true`,
+    summary: '清空输入框再填入文字（--submit 填完按回车）；也可以一次填多个：勾选框填 true/false，下拉框填选项',
+    opts: { append: { type: 'boolean', desc: '不清空，追加' }, submit: { type: 'boolean' }, ...snapOpt },
     run: async (p, o, rpc) => {
-      const a = p[0] || 'down'
-      const isRef = /^@?e\d+$/.test(a)
-      return (await rpc()).call('page.scroll', { tab: o.tab, ref: isRef ? a : undefined, dir: isRef ? undefined : a, amount: num(o.amount) })
+      const first = p[0] !== undefined ? splitAssign(p[0]) : null
+      if (first) {
+        const fields = p.map(x => {
+          const kv = splitAssign(x)
+          if (!kv) throw new BxError('BAD_ARGS', `一次填多个时，每项都要写成 目标=值：${x}`)
+          return { target: kv[0], value: kv[1] }
+        })
+        return (await rpc()).call('page.fillMany', { tab: o.tab, fields, snap: o.snap })
+      }
+      return (await rpc()).call('page.fill', { tab: o.tab, ref: p[0], text: p.slice(1).join(' '), append: o.append, submit: o.submit, snap: o.snap })
     },
   },
+  type: {
+    args: '<text>',
+    summary: '往当前焦点处输入文字（--submit 输完按回车）',
+    opts: { submit: { type: 'boolean' }, ...snapOpt },
+    run: async (p, o, rpc) => (await rpc()).call('page.type', { tab: o.tab, text: p.join(' '), submit: o.submit, snap: o.snap }),
+  },
+  press: { args: '<keys...>', summary: '按键，如 Enter / Control+A / Escape', opts: { ...snapOpt }, run: async (p, o, rpc) => (await rpc()).call('page.press', { tab: o.tab, keys: p, snap: o.snap }) },
+  select: { args: `${TARGET} <values...>`, summary: '下拉框选择（按值或文字）', opts: { ...snapOpt }, run: async (p, o, rpc) => (await rpc()).call('page.select', { tab: o.tab, ref: p[0], values: p.slice(1), snap: o.snap }) },
+  check: { args: TARGET, summary: '勾选', opts: { ...snapOpt }, run: async (p, o, rpc) => (await rpc()).call('page.check', { tab: o.tab, ref: p.join(' '), value: true, snap: o.snap }) },
+  uncheck: { args: TARGET, summary: '取消勾选', opts: { ...snapOpt }, run: async (p, o, rpc) => (await rpc()).call('page.check', { tab: o.tab, ref: p.join(' '), value: false, snap: o.snap }) },
+  upload: {
+    args: `${TARGET} <files...>`,
+    summary: '上传文件：目标可以是文件框，也可以是“点了会弹选文件窗口”的按钮',
+    opts: { ...snapOpt },
+    run: async (p, o, rpc) => (await rpc()).call('page.upload', { tab: o.tab, ref: p[0], files: p.slice(1).map(f => path.resolve(f)), snap: o.snap }),
+  },
+  drag: { args: '<from> <to>', summary: '拖拽（从一个元素拖到另一个）', opts: { ...snapOpt }, run: async (p, o, rpc) => (await rpc()).call('page.drag', { tab: o.tab, from: p[0], to: p[1], snap: o.snap }) },
+  scroll: {
+    args: '[down|up|top|bottom|<目标>]',
+    summary: '滚动（默认向下一屏），返回滚动位置和是否到底；给目标就把它滚进可视区域',
+    opts: { amount: { type: 'string', desc: '像素' } },
+    run: async (p, o, rpc) => {
+      const a = p.join(' ') || 'down'
+      const isDir = ['down', 'up', 'left', 'right', 'top', 'bottom'].includes(a)
+      return (await rpc()).call('page.scroll', { tab: o.tab, ref: isDir ? undefined : a, dir: isDir ? a : undefined, amount: num(o.amount) })
+    },
+  },
+  find: {
+    args: '<文字>',
+    summary: '在 snapshot 里搜文字，只返回匹配的那几行和编号（不用看整页）',
+    opts: { max: { type: 'string', desc: '最多列几处（默认 30）' } },
+    run: async (p, o, rpc) => {
+      if (!p.length) throw new BxError('BAD_ARGS', '要搜什么文字？', '例：bx find 加入购物车')
+      return (await rpc()).call('page.find', { tab: o.tab, text: p.join(' '), max: num(o.max) })
+    },
+  },
+  'mouse click': {
+    args: '<x> <y>',
+    summary: '按坐标点击（canvas、地图、在线文档画布）；坐标用 bx shot 看',
+    opts: { right: { type: 'boolean' }, double: { type: 'boolean' }, middle: { type: 'boolean' }, ...snapOpt },
+    run: async (p, o, rpc) => (await rpc()).call('input.mouse', { tab: o.tab, action: 'click', x: num(p[0]), y: num(p[1]), right: o.right, double: o.double, middle: o.middle, snap: o.snap }),
+  },
+  'mouse move': { args: '<x> <y>', summary: '移动鼠标（按住时就是拖动）', run: async (p, o, rpc) => (await rpc()).call('input.mouse', { tab: o.tab, action: 'move', x: num(p[0]), y: num(p[1]) }) },
+  'mouse down': { args: '[x y]', summary: '按下鼠标键（默认在当前位置）', opts: { right: { type: 'boolean' } }, run: async (p, o, rpc) => (await rpc()).call('input.mouse', { tab: o.tab, action: 'down', x: num(p[0]), y: num(p[1]), right: o.right }) },
+  'mouse up': { args: '[x y]', summary: '松开鼠标键', opts: { right: { type: 'boolean' } }, run: async (p, o, rpc) => (await rpc()).call('input.mouse', { tab: o.tab, action: 'up', x: num(p[0]), y: num(p[1]), right: o.right }) },
+  'mouse wheel': { args: '<dx> <dy>', summary: '滚轮（在鼠标当前位置），如 0 300', run: async (p, o, rpc) => (await rpc()).call('input.mouse', { tab: o.tab, action: 'wheel', dx: num(p[0]), dy: num(p[1]) }) },
+  'mouse drag': {
+    args: '<x1> <y1> <x2> <y2>',
+    summary: '按坐标拖动（中间分多步移动，滑块验证、画布）',
+    opts: { steps: { type: 'string', desc: '分几步（默认 15）' }, ...snapOpt },
+    run: async (p, o, rpc) => (await rpc()).call('input.mouse', { tab: o.tab, action: 'drag', x: num(p[0]), y: num(p[1]), x2: num(p[2]), y2: num(p[3]), steps: num(o.steps), snap: o.snap }),
+  },
+  'key down': { args: '<key>', summary: '按住一个键不放（如 Shift），之后的点击都带着它', run: async (p, o, rpc) => (await rpc()).call('input.key', { tab: o.tab, action: 'down', key: p[0] }) },
+  'key up': { args: '<key>', summary: '松开按住的键', run: async (p, o, rpc) => (await rpc()).call('input.key', { tab: o.tab, action: 'up', key: p[0] }) },
   wait: {
-    summary: '等待条件满足：--text 出现文字 / --gone 文字消失 / --selector / --url / --fn JS 表达式 / --idle 网络空闲',
+    summary: '等待条件满足：--text 出现文字 / --gone 文字消失 / --selector / --url 网址匹配 / --fn JS 表达式 / --idle 网络空闲',
     opts: {
-      text: { type: 'string' }, gone: { type: 'string' }, selector: { type: 'string' }, url: { type: 'string' },
+      text: { type: 'string' }, gone: { type: 'string' }, selector: { type: 'string' },
+      url: { type: 'string', desc: "子串 /issues/，通配 '*github.com/*/issues/*'，或正则 '/issues\\/\\d+/'" },
       fn: { type: 'string' }, idle: { type: 'boolean' }, timeout: { type: 'string', desc: '毫秒，默认 15000' },
     },
     run: async (_, o, rpc) => (await rpc()).call('page.wait', { tab: o.tab, text: o.text, gone: o.gone, selector: o.selector, url: o.url, fn: o.fn, idle: o.idle, timeout: num(o.timeout) }),
@@ -293,19 +401,15 @@ const COMMANDS: Record<string, Cmd> = {
   'net route list': { summary: '拦截规则列表', run: call('net.route.list') },
   'net route rm': { args: '[id]', summary: '删除拦截规则（不给 id 删全部）', run: async (p, o, rpc) => (await rpc()).call('net.route.rm', { tab: o.tab, id: p[0] }) },
 
-  // ---------------- 扩展 ----------------
-  'site list': {
-    summary: '可用的站点脚本',
-    run: async () => {
-      const out: any[] = []
-      for (const s of listSites()) {
-        const spec = await loadSite(s.name).catch(e => ({ description: `(加载失败：${e.message})`, commands: {} }) as any)
-        out.push({ name: s.name, scope: s.scope, commands: Object.keys(spec.commands).join(', '), description: spec.description })
-      }
-      return out
-    },
+  // ---------------- 函数库 / 脚本 ----------------
+  run: { args: "'<代码>' | -f 文件.js", summary: '在 Node 里执行 JS（全局有 bx），支持顶层 await 和 import，return 的值打印出来；结果太大写到 ~/.bx/out/', run: async () => null },
+  call: { args: '<域名> <函数> [参数...] [--选项 值]', summary: '调函数库里的函数；第一个参数写 - 就从 stdin 一行一条读，输出 JSONL', run: async () => null },
+  'lib list': {
+    args: '[域名]',
+    summary: '有哪些函数库；给域名就显示站点笔记 + 每个函数的签名、说明、例子',
+    run: async (p, o) => libList(p[0], (o.output as Format) || (process.env.BX_FORMAT as Format) || 'text'),
   },
-  'reader list': { summary: '可用的 reader（按域名匹配的内容提取脚本）', run: async (_, __, rpc) => (await rpc()).call('reader.list', { cwd: process.cwd() }) },
+  'lib show': { args: '<域名>', summary: '同 bx lib list <域名>', run: async (p, o) => libList(p[0] || '', (o.output as Format) || (process.env.BX_FORMAT as Format) || 'text') },
   cdp: {
     args: '<method> [json]',
     summary: '直接发 CDP 命令（逃生通道）',
@@ -344,28 +448,19 @@ const COMMANDS: Record<string, Cmd> = {
     summary: '在录制的所有响应 / 请求里搜一段文字',
     run: async p => findInTrace(traceDirOf(p[0]), p.slice(1).join(' ')),
   },
-  'script new': {
-    args: '<site>',
-    summary: '生成站点脚本骨架（--from-trace 根据录制生成，并附上调查报告）',
-    opts: { 'from-trace': { type: 'string' }, project: { type: 'boolean', desc: '放在项目的 .bx/sites（默认 ~/.bx/sites）' } },
-    run: async (p, o) => scriptNew(p[0], { fromTrace: o['from-trace'], project: o.project }),
-  },
-  'script test': {
-    args: '<site> <命令...> [参数]',
-    summary: '跑一遍站点命令并检查输出；--from-trace 和录制时看到的内容对比；--min 最少条数',
-    run: async () => null, // 在 main() 里特殊处理（参数要原样传给站点命令）
-  },
 }
 
 const GROUPS: [string, string[]][] = [
   ['浏览器', ['browser list', 'browser launch', 'browser connect', 'browser disconnect']],
   ['标签', ['tab list', 'tab open', 'tab use', 'tab close', 'tab activate', 'tab current']],
   ['标签组', ['group list', 'group create', 'group update', 'group ungroup']],
-  ['看页面', ['read', 'snapshot', 'shot', 'eval', 'console', 'dialogs', 'cookies']],
+  ['看页面', ['read', 'snapshot', 'find', 'shot', 'eval', 'console', 'dialogs', 'cookies']],
   ['操作页面', ['goto', 'back', 'forward', 'reload', 'click', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'hover', 'scroll', 'upload', 'drag', 'wait']],
+  ['按坐标 / 按住键', ['mouse click', 'mouse move', 'mouse down', 'mouse up', 'mouse wheel', 'mouse drag', 'key down', 'key up']],
+  ['函数库 / 脚本', ['run', 'call', 'lib list']],
   ['注入 / 网络', ['inject add', 'inject list', 'inject rm', 'net log', 'net show', 'net wait', 'net clear', 'net route add', 'net route list', 'net route rm']],
-  ['录制 → 写脚本', ['trace start', 'trace mark', 'trace add', 'trace status', 'trace stop', 'trace list', 'trace digest', 'trace show', 'trace find', 'trace rm', 'script new', 'script test']],
-  ['扩展', ['site list', 'reader list', 'cdp']],
+  ['录制', ['trace start', 'trace mark', 'trace add', 'trace status', 'trace stop', 'trace list', 'trace digest', 'trace show', 'trace find', 'trace rm']],
+  ['其它', ['cdp']],
   ['daemon', ['daemon start', 'daemon stop', 'daemon restart', 'daemon status', 'daemon log']],
 ]
 
@@ -379,9 +474,8 @@ function help() {
     }
     lines.push('')
   }
-  const sites = listSites()
-  if (sites.length) lines.push(`站点脚本：${sites.map(s => s.name).join(', ')}   （bx <站点> --help）`, '')
-  lines.push('典型流程：bx tab open <url> → bx read（看内容）/ bx snapshot（找 ref）→ bx click e3 / bx fill e5 "文字"')
+  lines.push("目标元素的写法：snapshot 编号 e15 ｜ CSS 选择器 \"#main button.submit\" ｜ getByRole('button', { name: '提交' }) ｜ getByLabel('邮箱') ｜ getByText('下一步')")
+  lines.push('典型流程：bx read <网址>（看内容）→ bx tab open <url> --bg --keep → bx snapshot -i -t t5 → bx click e3 -t t5；摸通了写成 ~/.bx/lib/<域名>.js，用 bx call / bx run 调')
   lines.push('环境变量：BX_TAB 固定操作某个标签（多个 agent 并行时用）；BX_FORMAT 默认输出格式')
   return lines.join('\n')
 }
@@ -421,40 +515,32 @@ async function main() {
   }
 
   if (!name) {
-    // 站点脚本？
-    const site = await loadSite(argv[0])
-    if (site) return runSite(site, argv.slice(1), { output: undefined, tab: process.env.BX_TAB, browser: pre.browser })
     // 命名空间下的帮助：bx tab / bx net
     const sub = Object.keys(COMMANDS).filter(k => k.startsWith(argv[0] + ' '))
     if (sub.length) {
       console.log(sub.map(k => `  bx ${(k + (COMMANDS[k].args ? ' ' + COMMANDS[k].args : '')).padEnd(34)} ${COMMANDS[k].summary}`).join('\n'))
       return
     }
-    throw new BxError('UNKNOWN_COMMAND', `未知命令：${argv[0]}`, '`bx help` 查看所有命令，`bx site list` 查看站点脚本')
+    throw new BxError('UNKNOWN_COMMAND', `未知命令：${argv[0]}`, '`bx help` 查看所有命令；网站相关的功能在函数库里：`bx lib list`，用 `bx call <域名> <函数>` 调')
   }
 
   const cmd = COMMANDS[name]
   const rest = argv.slice(name.split(' ').length)
-  if (name === 'script test' && !rest.includes('--help')) {
-    // 自己的选项挑出来，其余原样传给站点命令
-    const own: any = {}
-    const pass: string[] = []
-    for (let i = 0; i < rest.length; i++) {
-      if (rest[i] === '--from-trace' || rest[i] === '--min' || rest[i] === '--timeout') own[rest[i].slice(2)] = rest[++i]
-      else pass.push(rest[i])
-    }
-    if (!pass[0]) throw new BxError('BAD_ARGS', '需要站点名和命令', '例：bx script test bili search 电影 --limit 5 --from-trace t1')
-    const r = await scriptTest(pass[0], pass.slice(1), { fromTrace: own['from-trace'], min: own.min ? Number(own.min) : undefined, timeout: own.timeout ? Number(own.timeout) : undefined })
-    console.log(r.text)
-    if (!r.ok) process.exitCode = 1
-    return
-  }
+  // run / call 的参数原样交给它们自己解析（函数的选项是动态的）
+  const passPre = [...(pre.browser ? ['--browser', pre.browser] : [])]
+  if (name === 'run') return runCode([...passPre, ...rest])
+  if (name === 'call') return runCall([...rest, ...passPre])
   if (rest.includes('--help') || rest.includes('-h')) return console.log(cmdHelp(name, cmd))
   const options: any = { tab: { type: 'string', short: 't' }, output: { type: 'string', short: 'o' } }
   for (const [k, o] of Object.entries(cmd.opts || {})) options[k] = { type: o.type, ...(o.short ? { short: o.short } : {}), ...(o.multiple ? { multiple: true } : {}) }
-  const { values, positionals } = parseArgs({ args: rest, options, allowPositionals: true, strict: true })
+  // 负数（mouse wheel 0 -300）不要被当成选项
+  const NEG = '\u0000'
+  const args = rest.map(a => (/^-\d+(\.\d+)?$/.test(a) ? NEG + a : a))
+  const { values, positionals: rawPos } = parseArgs({ args, options, allowPositionals: true, strict: true })
+  const positionals = rawPos.map(a => (a.startsWith(NEG) ? a.slice(1) : a))
   const o: any = { ...values }
   o.tab ||= process.env.BX_TAB
+  o.browser ||= pre.browser
 
   let client: RpcClient | undefined
   const rpc = async () => (client ||= await RpcClient.connect())
@@ -470,10 +556,12 @@ async function main() {
 
 main().catch(e => {
   if (e instanceof BxError || e?.code) {
-    process.stderr.write(`✗ ${e.message}\n${e.hint ? '  → ' + e.hint + '\n' : ''}`)
+    process.stderr.write(`✗ ${e.code && !['ERROR', 'BAD_ARGS'].includes(e.code) && !String(e.code).startsWith('ERR_') ? `[${e.code}] ` : ''}${e.message}\n${e.hint ? '  → ' + e.hint + '\n' : ''}`)
   } else {
     process.stderr.write(`✗ ${e?.message || e}\n`)
   }
+  if (e?.where) process.stderr.write(`  位置：${e.where}\n`)
+  if (e?.hint && !(e instanceof BxError || e?.code)) process.stderr.write(`  → ${e.hint}\n`)
   process.exitCode = e?.code === 'BAD_ARGS' || e?.code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION' ? 2 : 1
 })
 

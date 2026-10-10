@@ -21,6 +21,13 @@ const pages: Record<string, string> = {
     <div id="mask" style="position:fixed;inset:0;background:rgba(0,0,0,.3);display:none" onclick="this.style.display='none'"></div>
     <button onclick="document.getElementById('mask').style.display='block'">显示遮罩</button>
     <iframe src="/frame" style="width:300px;height:80px"></iframe>
+    <div id="rr"><button onclick="this.textContent='目标已点'">重绘目标</button></div>
+    <button onclick="const d = document.getElementById('rr'); d.innerHTML = d.innerHTML">重绘一下</button>
+    <button id="sk" onclick="this.dataset.shift = event.shiftKey">shift 测试</button>
+    <canvas id="cv" width="200" height="100" style="border:1px solid #000" onclick="this.dataset.hit = event.offsetX + ',' + event.offsetY"></canvas>
+    <input type="file" id="hf" style="display:none" onchange="document.getElementById('hfn').textContent = this.files[0].name">
+    <button onclick="document.getElementById('hf').click()">选择文件</button><span id="hfn"></span>
+    <a href="/download">下载报告</a>
     <script>fetch('/api/user?id=1').then(r => r.json()).then(j => console.log('user', j.name))</script>
   </body></html>`,
   '/frame': `<!doctype html><html><body><button onclick="this.textContent='iframe 已点'">iframe 按钮</button></body></html>`,
@@ -90,6 +97,10 @@ export function startServer(port = 0): Promise<{ url: string; close: () => void 
     if (u.pathname.startsWith('/api/track')) {
       res.writeHead(204)
       return res.end()
+    }
+    if (u.pathname === '/download') {
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'content-disposition': 'attachment; filename="report.txt"' })
+      return res.end('报告内容 42')
     }
     if (u.pathname.startsWith('/api/user')) {
       res.writeHead(200, { 'content-type': 'application/json' })

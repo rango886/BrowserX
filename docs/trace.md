@@ -1,17 +1,18 @@
-# 录制 → 调查报告 → 写脚本
+# 录制 → 调查报告
 
-把"在网站上摸索一遍"变成"一条命令"：
+> 第二版里 trace 先原样保留（以后看还有没有用）。摸索网站更常用的办法是 `bx run` 里直接试，见 [lib.md](lib.md)。
+> 以前的 `bx script new / test` 已经删掉：报告读懂以后，把取数据的代码写成 `lib/<域名>.js` 里的函数就行。
+
+把"在网站上摸索一遍"整理成一份调查报告：
 
 ```
 bx trace start      录制：bx 的操作、用户手动的操作、所有接口请求和响应体、看到的内容
    … 用 bx 操作，或者让用户自己在浏览器里点一遍 …
 bx trace stop       停止，自动整理成调查报告（report.md）
-bx script new       根据报告生成脚本骨架（附上报告）
-   … AI 读报告、改骨架 …
-bx script test      跑一遍，检查输出，和录制时看到的内容对比
+   … AI 读报告，在 bx run 里试通，写成函数库里的函数 …
 ```
 
-分工：**程序**做去噪、归纳、溯源这些体力活，**AI** 负责理解意图、写代码，**`script test`** 负责验证。
+分工：**程序**做去噪、归纳、溯源这些体力活，**AI** 负责理解意图、写代码。
 
 ## 1. 录制
 
@@ -59,42 +60,18 @@ bx trace list
 bx trace rm rank
 ```
 
-## 4. 生成骨架
+## 4. 写成函数
 
-```bash
-bx script new mysite --from-trace rank          # 放在 ~/.bx/sites/mysite/
-bx script new mysite --from-trace rank --project # 放在项目的 .bx/sites/mysite/
-```
+报告读懂以后，按它给的方案在 `bx run` 里试，试通了存进 `~/.bx/lib/<域名>.js`（写法见 [lib.md](lib.md)）：
 
-生成的 `index.js` 会按报告选方案：
-
-- **没有签名的 JSON 接口** → `ctx.tab()` + `tab.fetch()` 直接调；参数表写好了，翻页参数换成变量，来自输入的参数换成命令参数。
-- **有签名** → `ctx.open()` + `tab.waitResponse()` 截获页面自己发的请求，并在注释里列出录制时的操作步骤（带选择器），告诉你怎么在页面上触发它。
+- **没有签名的 JSON 接口** → `bx.tab('<域名>')` + `tab.fetch()` 直接调；翻页参数换成变量，来自输入的参数换成函数参数。
+- **有签名** → 先试 `tab.fetch`（很多接口在页面里带着 cookie 直接请求就能用）；不行就用 `tab.collect()`：让页面自己发请求，我们接住返回，按报告里的操作步骤（带选择器）触发下一页。
 - **数据在 HTML 里** → 打开页面后用 `tab.eval` 读。
-
-骨架旁边会附上 `TRACE.md`（报告的副本）。骨架通常能直接跑出数据，但命令名、参数、翻页、要输出哪些字段，需要 AI 按报告改好。
-
-## 5. 验证
-
-```bash
-bx script test mysite list 关键词 --limit 20 --from-trace rank
-```
-
-会检查这些：
-
-- 退出码、输出条数（`--min N`）、是不是每行都是 JSON
-- 每个字段有值的比例和示例；**字段全是 undefined**（路径写错了）会报错
-- 有没有能给下一个命令用的主键（id / url）
-- `--from-trace`：录制时看到的内容，有多少出现在输出里。一条都没对上，通常说明数据来源不对，或者参数和录制时不一样。
-
-失败时退出码是 1，AI 可以根据输出继续修改，直到通过。
 
 ## 实例：B 站排行榜
 
-`sites/bili/index.js` 里的 `rank` 命令就是这样写出来的：
+`lib/bilibili.com.js` 里的 `rank` 函数就是这样写出来的：
 
 1. 录制时，报告指出数据在 `x/web-interface/ranking/v2` 的 `data.list[]`，有 `w_rid` 签名，并且“`rid` 随操作变化：点‘动画’ → 1005，点‘游戏’ → 1008”。
-2. 用骨架直接跑（截获方案），5.6 秒能出数据。
-3. 因为 B 站的 wbi 签名已经实现过了（`sites/bili/wbi.js`），改成直接调接口，0.3 秒。
-4. 用 bx 把每个分区点一遍，从网络记录里读出完整的分区 → rid 对应表。
-5. `bx script test bili rank --from-trace rank` 通过。
+2. 因为 B 站的 wbi 签名已经实现过了（`lib/_bili-wbi.js`），直接调接口，0.3 秒。
+3. 用 bx 把每个分区点一遍，从网络记录里读出完整的分区 → rid 对应表，写进文件顶部的站点笔记。

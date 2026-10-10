@@ -1,6 +1,6 @@
 import type { Driver } from './types.ts'
 import type { Trace } from './trace.ts'
-import { BxError, globToRegExp, sleep } from '../common/util.ts'
+import { BxError, globToRegExp, sleep, urlPattern } from '../common/util.ts'
 
 export interface NetEntry {
   id: number
@@ -34,6 +34,19 @@ export interface Route {
 
 type Waiter = { match: (e: NetEntry) => boolean; resolve: (e: NetEntry) => void }
 
+/** URL 匹配：/正则/、带 * 按通配，否则按子串；预检请求不算 */
+export function netMatcher(pattern: string) {
+  const re = urlPattern(pattern)
+  return (e: NetEntry) => (re ? re.test(e.url) : e.url.includes(pattern)) && e.type !== 'preflight' && e.method !== 'OPTIONS'
+}
+
+/** snapshot 时给编号记下的“指纹”：页面重绘后按它重新找元素 */
+export interface RefInfo {
+  role: string
+  name: string
+  nth: number
+}
+
 /**
  * 一个标签页的会话：负责这个标签相关的所有状态
  * - 已开启的 CDP domain（按需开启，尽量少开，降低被检测的概率）
@@ -47,8 +60,18 @@ export class TabSession {
   // ---- 元素编号 ----
   refs = new Map<string, number>() // e12 -> backendNodeId
   nodeRefs = new Map<number, string>() // backendNodeId -> e12
+  refInfo = new Map<string, RefInfo>() // e12 -> 角色 + 名字 + 第几个同名元素
   refSeq = 0
   navCount = 0
+  /** 这次操作过程中要告诉调用方的事（比如编号重新定位过） */
+  notes: string[] = []
+
+  // ---- 输入状态：按住的修饰键、鼠标位置 ----
+  mods = 0
+  mouse = { x: 0, y: 0, buttons: 0 }
+  /** 这个标签收到过 bx 发的鼠标按下（有的浏览器在这之前不接收键盘输入） */
+  kbdPrimed = false
+  private eventWaiters: { method: string; resolve: (p: any) => void }[] = []
 
   // ---- 事件记录 ----
   dialogs: { type: string; message: string; url: string; at: number; handled: string }[] = []
@@ -112,16 +135,39 @@ export class TabSession {
   clearRefs() {
     this.refs.clear()
     this.nodeRefs.clear()
+    this.refInfo.clear()
   }
 
-  refFor(backendNodeId: number) {
+  refFor(backendNodeId: number, info?: RefInfo) {
     let r = this.nodeRefs.get(backendNodeId)
     if (!r) {
       r = 'e' + ++this.refSeq
       this.nodeRefs.set(backendNodeId, r)
       this.refs.set(r, backendNodeId)
     }
+    if (info) this.refInfo.set(r, info)
     return r
+  }
+
+  /** 原来的元素没了，把编号指到新找到的元素上 */
+  rebindRef(ref: string, backendNodeId: number) {
+    const old = this.refs.get(ref)
+    if (old !== undefined) this.nodeRefs.delete(old)
+    this.refs.set(ref, backendNodeId)
+    this.nodeRefs.set(backendNodeId, ref)
+  }
+
+  /** 等某个 CDP 事件（先调用它再触发） */
+  waitEvent(method: string, timeout = 10000): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const w = { method, resolve }
+      this.eventWaiters.push(w)
+      setTimeout(() => {
+        if (!this.eventWaiters.includes(w)) return
+        this.eventWaiters = this.eventWaiters.filter(x => x !== w)
+        reject(new BxError('TIMEOUT', `等待 ${method} 超时 (${timeout}ms)`))
+      }, timeout)
+    })
   }
 
   resolveRef(ref: string): number {
@@ -136,6 +182,13 @@ export class TabSession {
 
   // ---------------- 事件处理 ----------------
   onEvent(method: string, p: any) {
+    if (this.eventWaiters.length) {
+      const hit = this.eventWaiters.filter(w => w.method === method)
+      if (hit.length) {
+        this.eventWaiters = this.eventWaiters.filter(w => !hit.includes(w))
+        hit.forEach(w => w.resolve(p))
+      }
+    }
     switch (method) {
       case 'Page.frameNavigated':
         if (!p.frame.parentId) {
@@ -264,8 +317,7 @@ export class TabSession {
   }
 
   waitForResponse(pattern: string, timeout = 30000): Promise<NetEntry> {
-    const re = pattern.includes('*') ? globToRegExp(pattern) : null
-    const match = (e: NetEntry) => (re ? re.test(e.url) : e.url.includes(pattern)) && e.type !== 'preflight'
+    const match = netMatcher(pattern)
     return new Promise((resolve, reject) => {
       const w: Waiter = { match, resolve }
       this.netWaiters.push(w)

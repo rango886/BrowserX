@@ -13,6 +13,10 @@ delete (env as any).BX_TAB
 function bx(...args: string[]): string {
   return execFileSync(process.execPath, [path.join(ROOT, 'bin/bx.js'), ...args], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 }
+/** 在某个目录里执行（项目级函数库生效），可以从 stdin 喂数据 */
+function bxIn(cwd: string, args: string[], input?: string): string {
+  return execFileSync(process.execPath, [path.join(ROOT, 'bin/bx.js'), ...args], { env, cwd, encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+}
 function bxErr(...args: string[]): string {
   try {
     bx(...args)
@@ -100,6 +104,70 @@ try {
     assert.equal(r.changes.newTabs[0].url, `${U}/list`)
   })
 
+  await test('定位：CSS / getByLabel / getByRole / getByText，多个匹配时报错列候选', () => {
+    assert.equal(json('fill', "getByLabel('用户名')", '小红').value, '小红')
+    assert.equal(json('fill', 'textarea[name=bio]', '简介').value, '简介')
+    const err = bxErr('click', 'button')
+    assert.match(err, /\[AMBIGUOUS\] button 匹配到/)
+    assert.match(err, /候选：/)
+    assert.match(bxErr('click', "getByText('不存在的字')"), /没有找到/)
+    bx('click', "getByRole('button', { name: '提交' })")
+    assert.equal(JSON.parse(json('eval', `document.getElementById('out').textContent`)).user, '小红')
+  })
+
+  await test('一次填多个字段 + find + 在元素上 eval', () => {
+    const r = json('fill', 'input[name=user]=甲', "getByLabel('城市')=北京", 'input[name=agree]=false')
+    assert.deepEqual(
+      r.fields.map((f: any) => f.value ?? f.selected?.[0] ?? f.checked),
+      ['甲', '北京', false],
+    )
+    assert.match(bx('find', '同意协议'), /checkbox "同意协议" \[ref=e\d+/)
+    assert.equal(json('eval', 'el => el.name', 'textarea'), 'bio')
+  })
+
+  await test('编号对应的元素被重绘后，按角色 + 名字自动重新定位', () => {
+    const ref = bx('snapshot', '-i').match(/button "重绘目标" \[ref=(e\d+)\]/)![1]
+    bx('click', "getByText('重绘一下')")
+    const r = json('click', ref)
+    assert.match(r.changes.note, /重新定位/)
+    assert.equal(json('eval', `document.querySelector('#rr button').textContent`), '目标已点')
+  })
+
+  await test('按坐标点击 + 按住 Shift + --modifiers', () => {
+    bx('scroll', '#cv')
+    const [x, y] = json('eval', `(() => { const r = document.getElementById('cv').getBoundingClientRect(); return [r.x, r.y] })()`)
+    bx('mouse', 'click', String(Math.round(x + 11)), String(Math.round(y + 21)))
+    const [hx, hy] = json('eval', `document.getElementById('cv').dataset.hit`).split(',').map(Number)
+    assert.ok(Math.abs(hx - 10) <= 1 && Math.abs(hy - 20) <= 1, `点到了 ${hx},${hy}`)
+    bx('key', 'down', 'Shift')
+    bx('click', '#sk')
+    bx('key', 'up', 'Shift')
+    assert.equal(json('eval', `document.getElementById('sk').dataset.shift`), 'true')
+    bx('click', '#sk')
+    assert.equal(json('eval', `document.getElementById('sk').dataset.shift`), 'false')
+    bx('click', '#sk', '--modifiers', 'Shift')
+    assert.equal(json('eval', `document.getElementById('sk').dataset.shift`), 'true')
+  })
+
+  await test('上传：目标是“选择文件”按钮也行', () => {
+    const r = json('upload', "getByRole('button', { name: '选择文件' })", path.join(ROOT, 'package.json'))
+    assert.equal(r.via, 'file-chooser')
+    assert.equal(json('eval', `document.getElementById('hfn').textContent`), 'package.json')
+  })
+
+  await test('点击下载，返回文件路径', () => {
+    const dir = path.join(HOME, 'dl')
+    fs.rmSync(dir, { recursive: true, force: true })
+    const r = json('click', "getByText('下载报告')", '--download', '--save', dir)
+    assert.equal(path.basename(r.download.file), 'report.txt')
+    assert.equal(fs.readFileSync(r.download.file, 'utf8'), '报告内容 42')
+  })
+
+  await test('--snap：操作完顺带返回 snapshot', () => {
+    const r = json('click', '#sk', '--snap')
+    assert.match(r.snapshot, /button "shift 测试" \[ref=e\d+\]/)
+  })
+
   await test('跳转后旧编号失效，并提示重新 snapshot', () => {
     const ref = bx('snapshot', '-i').match(/link "去文章页" \[ref=(e\d+)\]/)![1]
     const r = json('click', ref)
@@ -117,6 +185,32 @@ try {
     assert.match(bx('read', '-s', 'comments'), /第 4 条评论/)
   })
 
+  await test('read --grep：只返回命中的段落 + 位置，配合 --offset / --section', () => {
+    const r = json('read', '--grep', '第 [36] 段', '-C', '0')
+    assert.equal(r.grep.hits, 2)
+    assert.equal(r.matches.length, 2)
+    assert.match(r.matches[0].text, /^第 3 段/)
+    assert.doesNotMatch(r.content, /第 4 段/)
+    // 位置可以拿去 --offset 接着读
+    const at = json('read', '--offset', String(r.matches[1].offset), '--budget', '20')
+    assert.match(at.content, /^第 6 段/)
+    // 前后各带一段上下文（默认），相邻的合并成一块
+    const c = json('read', '--grep', '第 [56] 段')
+    assert.equal(c.matches.length, 1)
+    assert.match(c.matches[0].text, /第 4 段[\s\S]*第 7 段/)
+    // 只搜评论区；没命中时说清楚
+    assert.match(bx('read', '-s', 'comments', '--grep', '用户2'), /第 2 条评论/)
+    assert.match(bx('read', '--grep', '不存在的词xyz'), /没有匹配/)
+  })
+
+  await test('wait --url：子串 / 通配 / 正则', () => {
+    assert.equal(json('wait', '--url', '/article').ok, true)
+    assert.equal(json('wait', '--url', '*127.0.0.1*/art*').ok, true)
+    assert.equal(json('wait', '--url', '/\\/ar?ticle$/').ok, true)
+    assert.match(bxErr('wait', '--url', '/\\/article\\d+/', '--timeout', '500'), /TIMEOUT/)
+    assert.match(bxErr('wait', '--url', '/a(b/', '--timeout', '500'), /BAD_ARGS|正则/)
+  })
+
   await test('read：列表页识别 + 分页', () => {
     bx('goto', `${U}/list`)
     const r = json('read', '--limit', '5')
@@ -124,19 +218,6 @@ try {
     assert.equal(r.items.length, 5)
     assert.equal(r.items[0].url, `${U}/video/0`)
     assert.deepEqual(r.more, { next: 5, total: 12 })
-  })
-
-  await test('项目级 reader 优先', () => {
-    const dir = path.join(HOME, 'proj', '.bx', 'readers')
-    fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(
-      path.join(dir, 'list.js'),
-      `export const meta = { match: '*/list' }\nexport function read() { return { title: 'custom', content: document.querySelectorAll('li').length + ' items' } }\n`,
-    )
-    const out = execFileSync(process.execPath, [path.join(ROOT, 'bin/bx.js'), 'read', '-o', 'json'], { env, cwd: path.join(HOME, 'proj'), encoding: 'utf8' })
-    const r = JSON.parse(out)
-    assert.equal(r.via, 'reader:list')
-    assert.equal(r.content, '12 items')
   })
 
   await test('eval：await / 隔离环境', () => {
@@ -185,19 +266,101 @@ try {
     assert.ok(fs.statSync(r.file).size > 1000)
   })
 
-  await test('站点脚本：CSV 填表 + 管道', () => {
-    const csv = path.join(HOME, 'p.csv')
-    fs.writeFileSync(csv, 'user,bio,city,agree\n甲,"a, b",北京,是\n乙,x,广州,否\n')
-    const out = bx('form', 'fill', `${U}/form`, '--file', csv, '--submit', '提交', '--wait', '200', '--capture', '#out')
-    const rows = out.split('\n').map(l => JSON.parse(l))
-    assert.equal(rows.length, 2)
-    assert.equal(rows[0].ok, true)
-    assert.match(rows[0].result, /"bio":"a, b"/)
-    assert.match(rows[1].problems[0], /广州/)
-  })
-
   await test('未知命令给出提示', () => {
     assert.match(bxErr('nope'), /bx help/)
+  })
+
+  const PROJ = path.join(HOME, 'proj')
+  const LIB = `/* 测试站点笔记：列表页在 /list */
+import path from 'node:path'
+
+/** 原样返回参数（看类型转换）
+ *  @example echo('abc', { limit: 3 }) */
+export async function echo(word, { limit = 5, full = false, tag = 'x' } = {}) {
+  return { word, limit, full, tag, types: [typeof word, typeof limit, typeof full] }
+}
+
+/** 列表页的标题 */
+export async function titles(url, { limit = 3 } = {}) {
+  const tab = await bx.open(url)
+  try {
+    return await tab.eval(n => [...document.querySelectorAll('li h3')].slice(0, n).map(h => ({ title: h.innerText })), limit)
+  } finally {
+    await tab.close()
+  }
+}
+
+export async function read(tab) {
+  if (!(await tab.url()).includes('/list')) return null
+  return { title: 'custom', content: (await tab.eval(() => document.querySelectorAll('li').length)) + ' items' }
+}
+`
+
+  await test('函数库：lib list / call（类型看默认值）/ 管道', () => {
+    fs.mkdirSync(path.join(PROJ, '.bx', 'lib'), { recursive: true })
+    fs.writeFileSync(path.join(PROJ, '.bx', 'lib', '127.0.0.1.js'), LIB)
+    const list = bxIn(PROJ, ['lib', 'list', '127.0.0.1'])
+    assert.match(list, /测试站点笔记/)
+    assert.match(list, /echo\(word, \{ limit = 5, full = false, tag = 'x' \} = \{\}\)/)
+    assert.match(list, /bx call 127\.0\.0\.1 echo <word> \[--limit 5\] \[--full\] \[--tag x\]/)
+    assert.match(list, /例：echo\('abc', \{ limit: 3 \}\)/)
+    const r = JSON.parse(bxIn(PROJ, ['call', '127.0.0.1', 'echo', '42', '--limit', '3', '--full', '-o', 'json']))
+    assert.deepEqual(r, { word: '42', limit: 3, full: true, tag: 'x', types: ['string', 'number', 'boolean'] })
+    assert.match(bxIn(PROJ, ['lib', 'list']), /127\.0\.0\.1\s+echo titles read\s+（project）/)
+    const out = bxIn(PROJ, ['call', '127.0.0.1', 'titles', '-', '--limit', '2'], JSON.stringify({ url: `${U}/list` }) + '\n')
+    assert.deepEqual(
+      out.split('\n').map(l => JSON.parse(l).title),
+      ['电影 0 号：一个很长的标题', '电影 1 号：一个很长的标题'],
+    )
+  })
+
+  await test('bx read <网址>：用函数库的 read，末尾列出函数，读完关掉标签', () => {
+    const before = json('tab', 'list').length
+    const r = JSON.parse(bxIn(PROJ, ['read', `${U}/list`, '-o', 'json']))
+    assert.equal(r.via, 'lib:127.0.0.1')
+    assert.equal(r.content, '12 items')
+    assert.ok(r.lib.functions.some((f: any) => f.name === 'echo'))
+    assert.equal(json('tab', 'list').length, before)
+    const txt = bxIn(PROJ, ['read', `${U}/article`])
+    assert.match(txt, /via: readability/)
+    assert.match(txt, /这个网站有函数库 127\.0\.0\.1/)
+    assert.match(txt, /echo\(word/)
+  })
+
+  await test('bx run：顶层 await / import / bx.lib / 下一次拿回标签 / 大结果写文件 / 报错位置', () => {
+    const id = JSON.parse(bxIn(PROJ, ['run', `const t = await bx.open('${U}/list'); return t.id`, '-o', 'json']))
+    assert.match(id, /^t\d+$/)
+    assert.equal(JSON.parse(bxIn(PROJ, ['run', `await (await bx.tab('${id}')).title()`, '-o', 'json'])), '搜索结果')
+    bx('tab', 'close', id)
+    assert.equal(JSON.parse(bxIn(PROJ, ['run', `import path from 'node:path'; const r = await bx.lib('127.0.0.1').echo('a'); return path.basename('/x/' + r.word)`, '-o', 'json'])), 'a')
+    const big = bxIn(PROJ, ['run', 'return Array.from({ length: 5000 }, (_, i) => ({ i, s: "abc" }))'])
+    const file = big.match(/写到了：(.+)/)![1].trim()
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).length, 5000)
+    assert.match(big, /数组，共 5000 项/)
+    const errFile = path.join(HOME, 'err.js')
+    fs.writeFileSync(errFile, 'const a = 1\nnull.x\n')
+    assert.match(bxErr('run', '-f', errFile), /位置：.*err\.js:2  null\.x/)
+  })
+
+  await test('tab.collect：让网站自己发请求，接住每一页的返回', () => {
+    const f = path.join(HOME, 'collect.js')
+    fs.writeFileSync(
+      f,
+      `const tab = await bx.open('${U}/search')
+let calls = 0
+const pages = []
+const more = async () => {
+  calls++
+  if (calls === 1) return tab.fill('#q', '猫', { submit: true })
+  if (calls <= 3) return tab.click("getByRole('button', { name: '下一页' })")
+  return false
+}
+for await (const res of tab.collect('/api/search', { more, timeout: 2000 })) pages.push(res.data.page)
+await tab.close()
+return pages
+`,
+    )
+    assert.deepEqual(JSON.parse(bxIn(PROJ, ['run', '-f', f, '-o', 'json'])), [1, 2, 3])
   })
 
   await test('snapshot：带点击事件的普通元素也有编号', () => {
@@ -238,37 +401,6 @@ try {
     assert.equal(d.json.author.name, '作者1')
   })
 
-  await test('script new 根据 trace 生成骨架，骨架能直接跑', () => {
-    fs.rmSync(path.join(HOME, 'sites', 'e2esite'), { recursive: true, force: true })
-    const r = json('script', 'new', 'e2esite', '--from-trace', 'e2e')
-    const code = fs.readFileSync(r.file, 'utf8')
-    assert.match(code, /waitResponse\("\/api\/search"\)/) // 有签名 → 截获方案
-    assert.match(code, /fill \[#q\] = "猫咪" \+ 回车/) // 操作步骤写进注释
-    assert.ok(fs.existsSync(r.report))
-    // 像 AI 一样补上触发搜索的那一步
-    fs.writeFileSync(
-      r.file,
-      code.replace(
-        /await tab\.goto\(("[^"]+")\).*\n/,
-        (_m, url) => `await tab.goto(${url})\n        await tab.eval(q => { const el = document.querySelector('#q'); el.value = q; el.form.requestSubmit() }, ctx.args.query)\n`,
-      ),
-    )
-    const out = execFileSync(process.execPath, [path.join(ROOT, 'bin/bx.js'), 'script', 'test', 'e2esite', 'list', '猫咪', '--from-trace', 'e2e'], { env, encoding: 'utf8' })
-    assert.match(out, /^✓/)
-    assert.match(out, /输出 5 条/)
-    assert.match(out, /录制时看到的 \d+ 条内容里，[1-9]\d* 条出现在输出里/)
-  })
-
-  await test('script test 发现写错的字段', () => {
-    const f = path.join(HOME, 'sites', 'e2esite', 'index.js')
-    fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/yield \{ title: x\?\.title \}/, 'yield { title: x?.titel, id: x?.id }'))
-    try {
-      execFileSync(process.execPath, [path.join(ROOT, 'bin/bx.js'), 'script', 'test', 'e2esite', 'list', '猫咪'], { env, encoding: 'utf8' })
-      throw new Error('应该失败')
-    } catch (e: any) {
-      assert.match(String(e.stdout), /字段 title 全是 undefined/)
-    }
-  })
 } finally {
   try {
     bx('browser', 'disconnect', 'e2e', '--kill')

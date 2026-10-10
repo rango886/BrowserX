@@ -164,9 +164,9 @@ const handlers = {
     return (await waitComplete(t.id)) || t
   },
   'tabs.close': ({ tabId }) => chrome.tabs.remove(tabId),
-  'tabs.activate': async ({ tabId }) => {
+  'tabs.activate': async ({ tabId, focus = true }) => {
     const t = await chrome.tabs.update(tabId, { active: true })
-    await chrome.windows.update(t.windowId, { focused: true })
+    if (focus) await chrome.windows.update(t.windowId, { focused: true })
     return t
   },
   'windows.list': () => chrome.windows.getAll(),
@@ -207,6 +207,40 @@ const handlers = {
     await chrome.debugger.detach({ tabId }).catch(() => {})
   },
   'cookies.get': ({ url, name }) => (name ? chrome.cookies.get({ url, name }) : chrome.cookies.getAll({ url })),
+  // 下载：先 downloads.wait，再触发点击；等这之后新建的第一个下载完成
+  'downloads.ready': () => {
+    if (!chrome.downloads) throw new Error('插件没有 downloads 权限，请重新加载插件')
+    return true
+  },
+  'downloads.wait': ({ timeout = 120_000 }) =>
+    new Promise((resolve, reject) => {
+      let id = null
+      const cleanup = () => {
+        clearTimeout(timer)
+        chrome.downloads.onCreated.removeListener(onCreated)
+        chrome.downloads.onChanged.removeListener(onChanged)
+      }
+      const onCreated = item => {
+        if (id === null) id = item.id
+      }
+      const onChanged = async d => {
+        if (d.id !== id || !d.state) return
+        if (d.state.current === 'complete') {
+          cleanup()
+          const [item] = await chrome.downloads.search({ id })
+          resolve({ file: item.filename, url: item.finalUrl || item.url, name: item.filename.split(/[\\/]/).pop() })
+        } else if (d.state.current === 'interrupted') {
+          cleanup()
+          reject(new Error('下载中断：' + (d.error?.current || '')))
+        }
+      }
+      const timer = setTimeout(() => {
+        cleanup()
+        reject(new Error(id === null ? '点击后没有开始下载' : '下载没有在规定时间内完成'))
+      }, timeout)
+      chrome.downloads.onCreated.addListener(onCreated)
+      chrome.downloads.onChanged.addListener(onChanged)
+    }),
 }
 
 async function onMessage(msg) {

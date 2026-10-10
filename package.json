@@ -1,7 +1,7 @@
 {
   "name": "browserx",
-  "version": "1.0.0",
-  "description": "AI-friendly browser control: multi-browser, CLI, scripts, readers",
+  "version": "2.0.0",
+  "description": "AI-friendly browser control: multi-browser CLI, bx run (JS with a global bx), per-domain function libraries",
   "main": "src/sdk/index.ts",
   "scripts": {
     "test": "node test/e2e.ts"
