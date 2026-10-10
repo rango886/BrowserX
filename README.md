@@ -125,7 +125,15 @@ bx call bilibili.com comments BV1xx --limit 20
 bx call bilibili.com rank 知识 --limit 10 | bx call bilibili.com video - -o csv > 知识区.csv
 ```
 
-内置：`bilibili.com`（搜索、排行榜、视频信息、评论、下载、UP 主投稿和动态、视频页 read）、`google.com`、`reddit.com`、`news.ycombinator.com`、`aistudio.google.com`。
+内置 30 多个网站（`bx lib list` 看全部，带登录要求标记）：
+
+- 搜索引擎：`google.com`（含新闻、联想词、热搜）、`bing.com`、`duckduckgo.com`、`baidu.com`（含热搜）
+- 技术社区：`news.ycombinator.com`、`reddit.com`、`github.com`、`stackoverflow.com`、`v2ex.com`、`linux.do`、`medium.com`、`x.com`
+- 视频：`youtube.com`（含评论、字幕）、`bilibili.com`（含字幕、AI 总结、下载）、`douyin.com`
+- 中文资讯 / 社交：`weibo.com`、`zhihu.com`、`xiaohongshu.com`、`toutiao.com`、`weixin.qq.com`、`36kr.com`
+- 外文新闻：`reuters.com`、`bloomberg.com`
+- 金融：`xueqiu.com`、`eastmoney.com`、`sina.com.cn`、`10jqka.com.cn`、`tdx.com.cn`、`finance.yahoo.com`、`barchart.com`
+- AI：`aistudio.google.com`
 
 ## bx run：直接写 JS 把这些拼起来
 

@@ -1,6 +1,6 @@
 ---
 name: browserx
-description: BrowserX（命令 bx）：借用户已登录的浏览器上网。读网页、搜索和取数据（B 站、Google、Reddit、Hacker News 等有现成函数）、跨多个网站检索调研、点击填表、上传下载、截图、看接口请求。只要任务要用到网页内容或网站操作（尤其是要登录的网站），就用它。
+description: BrowserX（命令 bx）：借用户已登录的浏览器上网。读网页、搜索和取数据（Google、B 站、YouTube、Reddit、HN、微博、知乎、小红书、雪球、东方财富、Yahoo Finance 等 30 多个网站有现成函数）、跨多个网站检索调研、点击填表、上传下载、截图、看接口请求。只要任务要用到网页内容或网站操作（尤其是要登录的网站），就用它。
 ---
 
 # BrowserX（bx）：借用户的浏览器上网
@@ -14,7 +14,9 @@ description: BrowserX（命令 bx）：借用户已登录的浏览器上网。�
 | 看一个网页讲了什么 | `bx read <网址>` |
 | 长文章 / 长评论区里只找和问题相关的部分 | `bx read <网址> --grep '关键词1\|关键词2'` |
 | 搜索引擎 | `bx call google.com search …`（被拦自动换必应 / DuckDuckGo）；中文内容加一路 `baidu.com` |
-| 在某个网站上搜索、取列表、取评论 | 先 `bx lib list` 看有没有现成函数；有就 `bx call <域名> <函数> …` |
+| 在某个网站上搜索、取列表、取评论 | 先 `bx lib list` 看有没有现成函数；有就 `bx call <域名> <函数> …`（网站目录见第 4 节） |
+| 视频讲了什么 | `youtube.com transcript` / `bilibili.com subtitles` 取字幕，B 站还有 `summary` |
+| 股票、公告、资金流、期货外汇、美股期权 | `xueqiu.com` / `eastmoney.com` / `sina.com.cn` / `finance.yahoo.com` / `barchart.com`，怎么选见第 4 节 |
 | 跨好几个网站调研一个问题 | `bx run -f 脚本.js`，分步做，见第 7 节 |
 | 一次做一串事、批量处理、拼接几个网站的数据 | `bx run`（写 JS，全局有 `bx` 对象） |
 | 在页面上点按钮、填表、上传、下载 | `bx snapshot -i` / `bx find` 找元素，然后 `bx click` / `bx fill` |
@@ -24,8 +26,10 @@ description: BrowserX（命令 bx）：借用户已登录的浏览器上网。�
 
 ```bash
 bx browser list     # 有没有连上浏览器；有多个时问用户用哪个，之后都加 --browser <名字>
-bx lib list         # 有哪些网站的现成函数
+bx lib list         # 有哪些网站的现成函数；[要登录] / [登录更好] 标出哪些站要用户先登录
 ```
+
+任务要用到标了 `[要登录]` 的网站时，开工前就告诉用户“这几个站需要你在浏览器里登录”，别等报错了才说。
 
 `browser list` 为空：先等几秒再试（插件连上要一点时间）。还是空就请用户在 `chrome://extensions` 里加载仓库的 `extension/` 目录。用户不想用自己的浏览器时，用 `bx browser launch [名字]` 启动一个专用浏览器（无头加 `--headless`，但无头浏览器没有登录状态，很多网站会拦）。
 
@@ -73,29 +77,59 @@ bx read <网址> -s comments --grep AMD # 只在评论区里找
 
 ## 4. 函数库：bx call
 
+### 有哪些网站
+
+函数名只是大概，参数、例子和坑以 `bx lib list <域名>` 为准。标 🔑 的要用户在浏览器里登录；（🔑）是登录后更全 / 不容易被限流。
+
+| 类别 | 域名 | 能取什么 |
+|---|---|---|
+| 搜索引擎 | `google.com` | 网页搜索（被拦自动换必应 / DDG）、`suggest` 联想词、`news` Google 新闻、`trends` 热搜 |
+| | `bing.com` `duckduckgo.com` `baidu.com` | 网页搜索；`baidu.com hot` 百度热搜（实时 / 财经 / 民生 / 影视 / 小说 / 汽车 / 游戏） |
+| 技术社区 | `news.ycombinator.com` | 搜索、`stories` 首页 / 最新 / Ask / Show 榜、评论（按网页上的排名顺序）、用户 |
+| | `reddit.com`（🔑） | 搜索、`posts` 版块帖子 / 热门、评论（会展开“加载更多”）、用户及其帖子 / 评论、版块信息 |
+| | `github.com`（🔑） `stackoverflow.com` `v2ex.com` `linux.do` 🔑 `medium.com`（🔑） | 搜索、帖子 / 问题 / issue / 仓库、热门 / trending |
+| | `x.com` 🔑 | 搜推文、推文详情和回复、用户 |
+| 视频 | `youtube.com`（🔑） | 搜索、频道 / 频道全部视频、视频详情、`comments` 评论（翻页、按最新、楼中楼）、`transcript` 字幕（可机翻）、播放列表；🔑 订阅 / 历史 / 稍后观看 |
+| | `bilibili.com`（🔑） | 搜索、排行 / 热门、视频详情、评论、`subtitles` 字幕、`summary` 官方 AI 总结、UP 主及其视频 / 动态、下载、收藏夹、🔑 历史、关注 |
+| | `douyin.com`（🔑） | 热榜、搜索、视频详情、评论、用户视频 |
+| 中文资讯 / 社交 | `weibo.com` 🔑 | 热搜（不用登录）、搜索、微博正文、评论（带楼中楼）、用户及其微博 |
+| | `zhihu.com` 🔑 `xiaohongshu.com` 🔑 `toutiao.com`（🔑） `weixin.qq.com` `36kr.com` | 搜索、热榜、问答 / 笔记 / 文章正文、评论 |
+| 外文新闻 | `reuters.com`（🔑） `bloomberg.com`（🔑） | 搜索、栏目列表、文章正文 |
+| A 股 / 国内财经 | `xueqiu.com`（🔑） | 股票代码、行情、K 线、财务指标、公司资料、热股；讨论帖、帖子评论 |
+| | `eastmoney.com` | 7x24 快讯、公告列表和正文、龙虎榜和营业部席位、个股 / 板块资金流、北向成交、板块排行和成分股、涨跌排行（含 ETF / 可转债）、十大股东、人气榜 |
+| | `sina.com.cn` | 滚动新闻、7x24 直播、实时报价（**期货、外汇、全球指数**、港美股）、涨跌排行（东方财富被限流时用它） |
+| | `10jqka.com.cn` `tdx.com.cn` | 同花顺 / 通达信热股榜、热门板块；通达信还有 ETF / 可转债 / 期货 / 港美股人气榜 |
+| 美股 | `finance.yahoo.com` | 行情（含盘前盘后）、K 线、公司资料和估值、财报科目、期权链、新闻、热门、涨跌榜 |
+| | `barchart.com` | 期权：IV / IV Rank / Put-Call 比、带希腊值的期权链、到期日、异常期权成交 |
+| AI | `aistudio.google.com` 🔑 | 向 Gemini 提问 |
+
 ```bash
 bx lib list bilibili.com     # 站点笔记 + 每个函数的签名、说明、例子、命令行写法（第一次用某个网站先看这个）
-bx call bilibili.com search 纪录片 --limit 10
-bx call bilibili.com comments BV1GJ411x7h7 --limit 50 -o csv > 评论.csv
 bx call google.com search "sqlite production" --limit 20 --time year
-bx call bing.com search "sqlite production"        # 还有 duckduckgo.com、baidu.com（中文内容更全），参数一样
-bx call youtube.com videos @doctorx2023 --limit 200 # 频道全部视频；还有 channel / video / search
-bx call reddit.com search "sqlite production" --time year
-bx call news.ycombinator.com comments "https://news.ycombinator.com/item?id=12345"
+bx call google.com news "deno cloudflare" --days 7
+bx call bilibili.com comments BV1GJ411x7h7 --limit 50 -o csv > 评论.csv
+bx call bilibili.com subtitles BV1GJ411x7h7 --text      # 视频内容先看字幕 / summary，比看简介准
+bx call youtube.com transcript dQw4w9WgXcQ --translate zh-Hans --text
+bx call youtube.com videos '@doctorx2023' --limit 200    # PowerShell 里 @ 开头的参数要加引号
+bx call reddit.com comments "https://www.reddit.com/r/xxx/comments/abc/" --limit 300
+bx call eastmoney.com notices 600519 --type finance      # 公告；正文用 notice <id>
+bx call sina.com.cn quote "hf_GC,hf_CL,fx_susdcny,DINIW"  # 纽约金、原油、美元人民币、美元指数
+bx call finance.yahoo.com profile NVDA                   # 公司资料 + 估值 + 分析师目标价
 ```
 
-- **搜索引擎**：`google.com.search` 自带排队（同一个进程里的搜索一个接一个发，并行写 `Promise.allSettled` 也没事）、被人机验证拦住时等一会儿重试一次，还不行就**自动改用必应、再不行用 DuckDuckGo**（结果里 `engine` 字段标明来源，stderr 会打一行 ⚠），之后 10 分钟内直接走兜底。只要 Google 的结果就传 `--fallback false`；指定兜底顺序用 `--fallback baidu,bing`。
-- **YouTube**：`videos` 走内部翻页接口，几秒拉完几百条（含时长、播放量、发布时间、`members` 会员专享），不要自己滚动抓 DOM；`channel` 带注册日期、总播放、国家；`bx read` 打开频道页 / 视频页也会用它。评论还没做。
-- 位置参数按函数签名的顺序传，`--名字 值` 合成最后一个对象参数；`--full` 这种是开关。
-- 输出被管道或程序接走时默认是 JSONL；给人看用 `-o table` / `-o yaml`；要解析就用 `-o json`。
+- **搜索引擎**：`google.com search` 自带排队（同一个进程里的搜索一个接一个发，并行写 `Promise.allSettled` 也没事）、被人机验证拦住时等一会儿重试一次，还不行就**自动改用必应、再不行用 DuckDuckGo**（结果里 `engine` 字段标明来源，stderr 会打一行 ⚠），之后 10 分钟内直接走兜底。只要 Google 的结果就传 `--fallback false`；指定兜底顺序用 `--fallback baidu,bing`。`suggest` / `news` / `trends` 走公开接口，不会被拦。
+- **视频内容**：先用字幕（`youtube.com transcript`、`bilibili.com subtitles`）或 B 站 `summary`，比读简介、看评论猜要准得多。YouTube 列表类（`videos`、`playlist`）走内部翻页接口，几秒拉完几百条，不要自己滚动抓 DOM。
+- **金融数据怎么选**：A 股行情 / K 线 / 财务用 `xueqiu.com`；快讯、公告、龙虎榜、资金流、板块、股东用 `eastmoney.com`；期货、外汇、全球指数用 `sina.com.cn quote`；美股用 `finance.yahoo.com`，期权希腊值用 `barchart.com`。东方财富的行情列表接口（`rank` `boards` `moneyflowRank`）请求多了会被临时封 IP，报 `BLOCKED` 时按提示换新浪 / 同花顺 / 通达信。
+- 位置参数按函数签名的顺序传，`--名字 值` 合成最后一个对象参数；`--full` 这种是开关。函数自己有 `tab` 参数时（如 `youtube.com videos --tab streams`），`--tab` 交给函数，指定标签用 `-t`。
+- 输出被管道或程序接走时默认是 JSONL；给人看用 `-o table` / `-o yaml`；要解析就用 `-o json`。stderr 里“字段 xx 在全部记录里都是 undefined”多半只是这批数据没有这个字段，不用管。
 - **管道**：第一个参数写 `-` 就从 stdin 一行一条地读，每条执行一次。JSON 记录默认取它的 `url` 字段（`--field mid` 指定别的字段）；`--concurrency 3` 并发；某条失败只在 stderr 打 `✗`，其余照常。
 
 ```bash
 bx call bilibili.com search 电影解说 --limit 5 | bx call bilibili.com comments - --limit 3
 bx call bilibili.com rank 动画 --limit 5 | bx call bilibili.com user - --field mid
 bx call news.ycombinator.com search "bun in production" -o jsonl | bx call news.ycombinator.com comments - --limit 50
+bx call sina.com.cn search 黄金 --limit 3 | bx call sina.com.cn quote - --field symbol
 ```
-
 ## 5. bx run：写 JS 串起来
 
 代码在 Node 里执行（ES 模块）：可以用顶层 `await` 和 `import fs from 'node:fs'`，`return` 的值会打印出来。只有一个表达式时可以不写 `return`。
@@ -201,7 +235,8 @@ bx run -f step3.js
 
 ```js
 // ~/.bx/lib/example.com.js
-/* 站点笔记：接口在哪、字段什么意思、有什么坑（bx lib list 时显示；下次来修先看它） */
+/* 站点笔记：接口在哪、字段什么意思、有什么坑（bx lib list 时显示；下次来修先看它）
+ * @login required 没登录会怎样（required 必须登录 / optional 登录更好 / 不写就是不用登录；函数说明里也能写，覆盖这里） */
 
 /** 一行说明
  *  @example search('关键词', { limit: 20 }) */
@@ -218,6 +253,7 @@ export async function read(tab) { … }
 ```
 
 - 参数类型看默认值（`limit = 20` 是数字，`full = false` 是开关），不用另外声明；全局有 `bx` 和 `BxError`，不用 import。
+- 标了 `@login` 的函数要自己认出“没登录”（返回 200 但 JSON 里带错误码、跳到登录页、只给前几条）并抛 `NEED_LOGIN`，框架只认得 401 / 403。
 - 函数库里定位元素用 CSS 或 `getByRole(...)`，不要用编号（页面一变编号就变）；自己开的标签在 `finally` 里关掉。
 - 动手之前先看看 [OpenCLI](https://github.com/jackwener/opencli) 的 `clis/<站点>/` 有没有现成实现：它的 `page.goto` / `page.evaluate` 对应 `tab.goto` / `tab.eval`。
 - 详细写法见仓库里的 `docs/lib.md`。想录下一次操作、自动分析数据来自哪个接口：`bx trace start --goal "…"` … `bx trace stop`，见 `docs/trace.md`。
