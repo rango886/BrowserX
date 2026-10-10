@@ -162,7 +162,7 @@ async function bxExtract(opts, L) {
     } catch {}
   }
   const mainEl = document.querySelector('main,[role=main],article') || document.body
-  const list = !opts.via || opts.via === 'list' ? detectList(document.body) : null
+  const list = (!opts.via || opts.via === 'list') && document.body ? detectList(document.body) : null
   const comments = findComments()
 
   const artLen = article ? article.textContent.trim().length : 0

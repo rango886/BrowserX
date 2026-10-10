@@ -40,6 +40,12 @@ export interface ReadOpts {
 
 export async function read(s: TabSession, o: ReadOpts) {
   await s.ensure('Page')
+  // 后台标签刚打开时可能还是空文档（body 为 null，或者客户端渲染还没出文字），先等一下，最多 6 秒
+  for (let i = 0; i < 30; i++) {
+    const ok = await s.evaluate(`!!document.body && document.readyState !== 'loading' && (document.body.innerText || '').trim().length > 50`, { timeout: 2000 }).catch(() => false)
+    if (ok) break
+    await sleep(200)
+  }
   for (let i = 0; i < (o.scroll ?? 0); i++) {
     await scroll(s, { dir: 'down' })
     await sleep(500)
