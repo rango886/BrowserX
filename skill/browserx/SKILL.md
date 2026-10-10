@@ -1,6 +1,6 @@
 ---
 name: browserx
-description: BrowserX（命令 bx）：借用户已登录的浏览器上网。读网页、搜索和取数据（Google、B 站、YouTube、Reddit、HN、微博、知乎、小红书、雪球、东方财富、Yahoo Finance 等 30 多个网站有现成函数）、跨多个网站检索调研、点击填表、上传下载、截图、看接口请求。只要任务要用到网页内容或网站操作（尤其是要登录的网站），就用它。
+description: BrowserX（命令 bx）：借用户已登录的浏览器上网。读网页、搜索和取数据（Google、B 站、YouTube、Reddit、HN、微博、知乎、小红书、雪球、东方财富、Yahoo Finance、arXiv、维基百科等 50 多个网站有现成函数）、跨多个网站检索调研、点击填表、上传下载、截图、看接口请求。只要任务要用到网页内容或网站操作（尤其是要登录的网站），就用它。
 ---
 
 # BrowserX（bx）：借用户的浏览器上网
@@ -17,6 +17,12 @@ description: BrowserX（命令 bx）：借用户已登录的浏览器上网。�
 | 在某个网站上搜索、取列表、取评论 | 先 `bx lib list` 看有没有现成函数；有就 `bx call <域名> <函数> …`（网站目录见第 4 节） |
 | 视频讲了什么 | `youtube.com transcript` / `bilibili.com subtitles` 取字幕，B 站还有 `summary` |
 | 股票、公告、资金流、期货外汇、美股期权 | `xueqiu.com` / `eastmoney.com` / `sina.com.cn` / `finance.yahoo.com` / `barchart.com`，怎么选见第 4 节 |
+| 加密货币行情、市值榜、趋势币 | `binance.com` / `coingecko.com` |
+| 论文、审稿、AI 模型和数据集 | `arxiv.org` / `semanticscholar.org` / `openreview.net` / `huggingface.co` |
+| 百科词条、网页的历史存档 | `wikipedia.org` / `archive.org`（Wayback） |
+| 依赖包详情、下载量、CVE / 开源漏洞 | `npmjs.com` / `pypi.org` / `crates.io` / `nvd.nist.gov` / `osv.dev` |
+| 英文新闻、Newsletter、新产品发布 | `bbc.com` / `substack.com` / `producthunt.com` / `lobste.rs` |
+| 中国政府和部委的政策文件 | `gov.cn`（搜索、最新列表、全文） |
 | 跨好几个网站调研一个问题 | `bx run -f 脚本.js`，分步做，见第 7 节 |
 | 一次做一串事、批量处理、拼接几个网站的数据 | `bx run`（写 JS，全局有 `bx` 对象） |
 | 在页面上点按钮、填表、上传、下载 | `bx snapshot -i` / `bx find` 找元素，然后 `bx click` / `bx fill` |
@@ -89,12 +95,22 @@ bx read <网址> -s comments --grep AMD # 只在评论区里找
 | | `reddit.com`（🔑） | 搜索、`posts` 版块帖子 / 热门、评论（会展开“加载更多”）、用户及其帖子 / 评论、版块信息 |
 | | `github.com`（🔑） `stackoverflow.com` `v2ex.com` `linux.do` 🔑 `medium.com`（🔑） | 搜索、帖子 / 问题 / issue / 仓库、热门 / trending |
 | | `x.com` 🔑 | 搜推文、推文详情和回复、用户 |
+| 学术 / AI | `arxiv.org` | 搜论文、论文摘要和 PDF 链接、作者的全部论文、分类最新；`semanticscholar.org` 搜论文、引用和参考文献、相关论文推荐；`openreview.net` 搜投稿、审稿意见和评分、作者；`huggingface.co`（🔑 登录看私有）搜模型 / 数据集 / Spaces、模型详情、每日 / 每周热门榜 |
+| 参考 / 存档 | `wikipedia.org` | 搜词条、摘要、正文（按小节）、每日 / 每月最多浏览、随机词条；`archive.org` 查 Wayback 历史快照和快照里的正文、搜存档资料和文件列表 |
+| 包和漏洞 | `npmjs.com` `pypi.org` `crates.io` | 搜索、包详情（版本、依赖、仓库）、下载量（按日 / 周）；`nvd.nist.gov` 查 CVE 详情和按关键词 / 严重度 / 时间搜漏洞；`osv.dev` 按包名（指定生态、版本）查已知漏洞和漏洞详情 |
+| 币圈 | `binance.com` | 实时价格、全市场行情、成交额排行、涨跌幅榜、K 线、盘口、成交流水、合约资金费率 |
+| | `coingecko.com` | 市值榜（可按分类过滤）、币详情、历史价格、趋势币、全球行情、分类、交易所、衍生品 |
 | 视频 | `youtube.com`（🔑） | 搜索、频道 / 频道全部视频、视频详情、`comments` 评论（翻页、按最新、楼中楼）、`transcript` 字幕（可机翻）、播放列表；🔑 订阅 / 历史 / 稍后观看 |
 | | `bilibili.com`（🔑） | 搜索、排行 / 热门、视频详情、评论、`subtitles` 字幕、`summary` 官方 AI 总结、UP 主及其视频 / 动态、下载、收藏夹、🔑 历史、关注 |
 | | `douyin.com`（🔑） | 热榜、搜索、视频详情、评论、用户视频 |
 | 中文资讯 / 社交 | `weibo.com` 🔑 | 热搜（不用登录）、搜索、微博正文、评论（带楼中楼）、用户及其微博 |
 | | `zhihu.com` 🔑 `xiaohongshu.com` 🔑 `toutiao.com`（🔑） `weixin.qq.com` `36kr.com` | 搜索、热榜、问答 / 笔记 / 文章正文、评论 |
-| 外文新闻 | `reuters.com`（🔑） `bloomberg.com`（🔑） | 搜索、栏目列表、文章正文 |
+| 外文新闻 / Newsletter | `reuters.com`（🔑） `bloomberg.com`（🔑） | 搜索、栏目列表、文章正文 |
+| | `bbc.com` | 各栏目头条（RSS，含 BBC 中文）、搜索、文章正文 |
+| | `substack.com` | 分类热榜（文章和热门 Notes）、搜文章和 Newsletter、某个 Newsletter 的最新文章、正文 |
+| | `lobste.rs` | 热门 / 最新 / 活跃榜、按标签和域名看帖子、搜帖子、评论 |
+| | `producthunt.com` | 今日发布、日 / 周 / 月 / 年排行榜、最新、分类佳作、搜产品、产品详情 |
+| 中国政策 | `gov.cn` | 国务院文件、部门文件、政策解读的最新列表（可按日期和标题过滤）、全文搜索（国务院文件 / 公报 / 全部）、正文和附件链接 |
 | A 股 / 国内财经 | `xueqiu.com`（🔑） | 股票代码、行情、K 线、财务指标、公司资料、热股；讨论帖、帖子评论 |
 | | `eastmoney.com` | 7x24 快讯、公告列表和正文、龙虎榜和营业部席位、个股 / 板块资金流、北向成交、板块排行和成分股、涨跌排行（含 ETF / 可转债）、十大股东、人气榜 |
 | | `sina.com.cn` | 滚动新闻、7x24 直播、实时报价（**期货、外汇、全球指数**、港美股）、涨跌排行（东方财富被限流时用它） |
@@ -115,11 +131,13 @@ bx call reddit.com comments "https://www.reddit.com/r/xxx/comments/abc/" --limit
 bx call eastmoney.com notices 600519 --type finance      # 公告；正文用 notice <id>
 bx call sina.com.cn quote "hf_GC,hf_CL,fx_susdcny,DINIW"  # 纽约金、原油、美元人民币、美元指数
 bx call finance.yahoo.com profile NVDA                   # 公司资料 + 估值 + 分析师目标价
+bx call binance.com top --limit 10                       # 币安成交额前十；coingecko.com top 是市值榜
+bx call gov.cn search 消费 --type state --sort time      # 国务院文件全文搜；正文用 gov.cn article <网址>
 ```
 
 - **搜索引擎**：`google.com search` 自带排队（同一个进程里的搜索一个接一个发，并行写 `Promise.allSettled` 也没事）、被人机验证拦住时等一会儿重试一次，还不行就**自动改用必应、再不行用 DuckDuckGo**（结果里 `engine` 字段标明来源，stderr 会打一行 ⚠），之后 10 分钟内直接走兜底。只要 Google 的结果就传 `--fallback false`；指定兜底顺序用 `--fallback baidu,bing`。`suggest` / `news` / `trends` 走公开接口，不会被拦。
 - **视频内容**：先用字幕（`youtube.com transcript`、`bilibili.com subtitles`）或 B 站 `summary`，比读简介、看评论猜要准得多。YouTube 列表类（`videos`、`playlist`）走内部翻页接口，几秒拉完几百条，不要自己滚动抓 DOM。
-- **金融数据怎么选**：A 股行情 / K 线 / 财务用 `xueqiu.com`；快讯、公告、龙虎榜、资金流、板块、股东用 `eastmoney.com`；期货、外汇、全球指数用 `sina.com.cn quote`；美股用 `finance.yahoo.com`，期权希腊值用 `barchart.com`。东方财富的行情列表接口（`rank` `boards` `moneyflowRank`）请求多了会被临时封 IP，报 `BLOCKED` 时按提示换新浪 / 同花顺 / 通达信。
+- **金融数据怎么选**：A 股行情 / K 线 / 财务用 `xueqiu.com`；快讯、公告、龙虎榜、资金流、板块、股东用 `eastmoney.com`；期货、外汇、全球指数用 `sina.com.cn quote`；美股用 `finance.yahoo.com`，期权希腊值用 `barchart.com`；币圈实时行情和盘口用 `binance.com`，市值榜和趋势币用 `coingecko.com`。东方财富的行情列表接口（`rank` `boards` `moneyflowRank`）请求多了会被临时封 IP，报 `BLOCKED` 时按提示换新浪 / 同花顺 / 通达信。
 - 位置参数按函数签名的顺序传，`--名字 值` 合成最后一个对象参数；`--full` 这种是开关。函数自己有 `tab` 参数时（如 `youtube.com videos --tab streams`），`--tab` 交给函数，指定标签用 `-t`。
 - 输出被管道或程序接走时默认是 JSONL；给人看用 `-o table` / `-o yaml`；要解析就用 `-o json`。stderr 里“字段 xx 在全部记录里都是 undefined”多半只是这批数据没有这个字段，不用管。
 - **管道**：第一个参数写 `-` 就从 stdin 一行一条地读，每条执行一次。JSON 记录默认取它的 `url` 字段（`--field mid` 指定别的字段）；`--concurrency 3` 并发；某条失败只在 stderr 打 `✗`，其余照常。

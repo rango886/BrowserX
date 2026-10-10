@@ -126,14 +126,18 @@ bx call bilibili.com comments BV1xx --limit 20
 bx call bilibili.com rank 知识 --limit 10 | bx call bilibili.com video - -o csv > 知识区.csv
 ```
 
-内置 30 多个网站（`bx lib list` 看全部，带登录要求标记）：
+内置 50 多个网站（`bx lib list` 看全部，带登录要求标记）：
 
-- 搜索引擎：`google.com`（含新闻、联想词、热搜）、`bing.com`、`duckduckgo.com`、`baidu.com`（含热搜）
-- 技术社区：`news.ycombinator.com`、`reddit.com`、`github.com`、`stackoverflow.com`、`v2ex.com`、`linux.do`、`medium.com`、`x.com`
+- 搜索引擎：`google.com`（含新闻、联想词、热搜、Trends 关键词热度）、`bing.com`、`duckduckgo.com`、`baidu.com`（含热搜）
+- 学术：`arxiv.org`（搜索、论文、作者、最新）、`semanticscholar.org`（搜索、引用、推荐）、`openreview.net`（搜索、审稿）、`huggingface.co`（模型 / 数据集 / Spaces / 论文、热门榜）
+- 技术社区：`news.ycombinator.com`、`reddit.com`、`github.com`、`stackoverflow.com`、`v2ex.com`、`linux.do`、`medium.com`、`x.com`、`lobste.rs`（榜单 / 标签 / 评论）、`producthunt.com`（今日 / 排行榜 / 分类 / 产品详情）
 - 视频：`youtube.com`（含评论、字幕）、`bilibili.com`（含字幕、AI 总结、下载）、`douyin.com`
 - 中文资讯 / 社交：`weibo.com`、`zhihu.com`、`xiaohongshu.com`、`toutiao.com`、`weixin.qq.com`、`36kr.com`
-- 外文新闻：`reuters.com`、`bloomberg.com`
-- 金融：`xueqiu.com`、`eastmoney.com`、`sina.com.cn`、`10jqka.com.cn`、`tdx.com.cn`、`finance.yahoo.com`、`barchart.com`
+- 外文新闻 / Newsletter：`reuters.com`、`bloomberg.com`、`bbc.com`（栏目 RSS、搜索、正文）、`substack.com`（分类热榜、搜索、Newsletter 文章和正文）
+- 参考 / 存档：`wikipedia.org`（搜索、摘要、正文、每日热榜）、`archive.org`（Wayback 快照和存档资料）
+- 金融：`xueqiu.com`、`eastmoney.com`、`sina.com.cn`、`10jqka.com.cn`、`tdx.com.cn`、`finance.yahoo.com`、`barchart.com`；币圈 `binance.com`（行情 / K 线 / 盘口 / 涨跌榜）、`coingecko.com`（市值榜、趋势币、交易所）
+- 包和漏洞：`npmjs.com`、`pypi.org`、`crates.io`（搜索、详情、下载量）、`nvd.nist.gov` / `osv.dev`（CVE 和开源漏洞）
+- 政策：`gov.cn`（国务院 / 部委文件最新列表、全文搜索、正文和附件）
 - AI：`aistudio.google.com`
 
 ## bx run：直接写 JS 把这些拼起来
