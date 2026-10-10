@@ -74,6 +74,19 @@ export interface LibParam {
   options?: LibParam[]
 }
 
+/**
+ * 要不要登录（@login 标签）：
+ * - required：必须登录，没登录会报 NEED_LOGIN
+ * - optional：不登录也能用，但会受限（结果少、更容易被限流、看不到会员内容……）
+ * - none：不用登录（不写就是这个）
+ * 写在文件顶部的站点笔记里是整个站的默认值，写在函数说明里覆盖它。后面可以跟一句说明。
+ */
+export type LoginLevel = 'required' | 'optional' | 'none'
+export interface LoginInfo {
+  level: LoginLevel
+  note?: string
+}
+
 export interface LibFn {
   name: string
   params: LibParam[]
@@ -82,12 +95,49 @@ export interface LibFn {
   summary: string
   examples: string[]
   generator?: boolean
+  /** 函数自己写的 @login；没写时看站点的 */
+  login?: LoginInfo
 }
 
 export interface LibInfo extends LibEntry {
   notes: string
+  /** 站点笔记里的 @login */
+  login?: LoginInfo
   functions: LibFn[]
 }
+
+const LOGIN_ALIAS: Record<string, LoginLevel> = { required: 'required', yes: 'required', must: 'required', optional: 'optional', maybe: 'optional', none: 'none', no: 'none' }
+
+/** 解析 @login 后面的内容：'required 说明' → { level, note } */
+function parseLogin(s: string): LoginInfo | undefined {
+  const m = s.trim().match(/^(\w+)\s*[:：—\-]?\s*(.*)$/s)
+  const level = m && LOGIN_ALIAS[m[1].toLowerCase()]
+  if (!level) return undefined
+  return m![2].trim() ? { level, note: m![2].trim() } : { level }
+}
+
+/** 从站点笔记里取出 @login 行（显示时不重复列出这一行） */
+function takeLogin(notes: string): { notes: string; login?: LoginInfo } {
+  let login: LoginInfo | undefined
+  const rest = notes
+    .split('\n')
+    .filter(l => {
+      const m = l.match(/^\s*[-*]?\s*@login\s+(.*)$/)
+      if (!m) return true
+      login = parseLogin(m[1]) || login
+      return false
+    })
+    .join('\n')
+    .trim()
+  return { notes: rest, login }
+}
+
+/** 函数实际要不要登录：函数自己写了就用它的，否则用站点的 */
+export function fnLogin(info: Pick<LibInfo, 'login'>, f: LibFn): LoginInfo {
+  return f.login || info.login || { level: 'none' }
+}
+
+export const LOGIN_LABEL: Record<LoginLevel, string> = { required: '要登录', optional: '登录更好', none: '不用登录' }
 
 /** 跳过字符串 / 模板 / 注释，找和 open 配对的括号位置 */
 function matchClose(src: string, start: number): number {
@@ -225,10 +275,12 @@ function parseDoc(doc: string) {
   const lines = commentText(doc).split('\n')
   const desc: string[] = []
   const examples: string[] = []
+  let login: LoginInfo | undefined
   let inEx = false
   for (const l of lines) {
     const m = l.match(/^\s*@(\w+)\s*(.*)$/)
     if (m) {
+      if (m[1] === 'login') login = parseLogin(m[2]) || login
       inEx = m[1] === 'example'
       if (inEx && m[2].trim()) examples.push(m[2].trim())
       continue
@@ -238,10 +290,10 @@ function parseDoc(doc: string) {
     } else desc.push(l)
   }
   const d = desc.join('\n').trim()
-  return { desc: d, summary: d.split('\n')[0] || '', examples }
+  return { desc: d, summary: d.split('\n')[0] || '', examples, ...(login ? { login } : {}) }
 }
 
-export function parseLibSource(src: string): { notes: string; functions: LibFn[] } {
+export function parseLibSource(src: string): { notes: string; login?: LoginInfo; functions: LibFn[] } {
   const functions: LibFn[] = []
   const re = /export\s+(?:async\s+)?function\s*(\*)?\s*([\w$]+)\s*\(|export\s+const\s+([\w$]+)\s*=\s*(?:async\s+)?(?:function\s*(\*)?\s*[\w$]*\s*\(|\(|([\w$]+)\s*=>)/g
   for (const m of src.matchAll(re)) {
@@ -270,7 +322,7 @@ export function parseLibSource(src: string): { notes: string; functions: LibFn[]
     const signature = `${name}(${paramsRaw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '').replace(/\s+/g, ' ').trim()})`
     functions.push({ name, params, signature, ...d, generator: !!(m[1] || m[4]) })
   }
-  return { notes: headNotes(src), functions }
+  return { ...takeLogin(headNotes(src)), functions }
 }
 
 export function libInfo(e: LibEntry): LibInfo {
@@ -292,11 +344,14 @@ export function cliUsage(domain: string, f: LibFn) {
 /** bx lib list <域名> 的文本 */
 export function describeLib(info: LibInfo, opts: { notes?: boolean } = {}) {
   const L: string[] = [`${info.domain}  （${info.scope}：${info.file}）`]
+  const site = info.login || { level: 'none' as const }
+  L.push(`登录：${LOGIN_LABEL[site.level]}${site.note ? ' — ' + site.note : ''}${site.level === 'required' ? '（没登录会报 NEED_LOGIN，请用户在浏览器里登录这个网站）' : ''}`)
   if (opts.notes !== false && info.notes) L.push('', ...(/^站点笔记/.test(info.notes) ? [] : ['站点笔记：']), ...info.notes.split('\n').map(l => '  ' + l))
   L.push('', `函数（bx call ${info.domain} <函数> …，或在 bx run 里 bx.lib('${info.domain}').<函数>(…)）：`)
   for (const f of info.functions) {
     L.push('', `  ${f.signature}`)
     if (f.desc) L.push(...f.desc.split('\n').map(l => '      ' + l))
+    if (f.login && (f.login.level !== site.level || f.login.note)) L.push(`      登录：${LOGIN_LABEL[f.login.level]}${f.login.note ? ' — ' + f.login.note : ''}`)
     for (const e of f.examples) L.push(`      例：${e}`)
     if (f.name !== 'read') L.push(`      命令行：${cliUsage(info.domain, f)}`)
     else L.push('      （bx read 打开这个域名的网址时会先用它）')

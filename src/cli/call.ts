@@ -1,7 +1,7 @@
 import readline from 'node:readline'
 import { BxError } from '../common/util.ts'
 import { createBx } from '../sdk/index.ts'
-import { cliUsage, describeLib, findLib, importLib, libInfo, listLibs, type LibFn, type LibInfo, type LibParam } from '../sdk/lib.ts'
+import { cliUsage, describeLib, findLib, fnLogin, importLib, libInfo, listLibs, type LibFn, type LibInfo, type LibParam } from '../sdk/lib.ts'
 import { render, type Format } from './output.ts'
 
 /**
@@ -57,7 +57,11 @@ function parseCallArgs(argv: string[], f: LibFn | undefined): Parsed {
       break
     }
     if (a === '-o' || a === '--output') r.own.output = next() as Format
-    else if (a === '-t' || a === '--tab') r.own.tab = next()
+    // 函数自己声明了同名参数（比如 youtube videos 的 tab）时，--tab / --browser / --field / --concurrency 交给函数；-t 始终是指定标签
+    else if (/^--(tab|browser|field|concurrency)(=|$)/.test(a) && known.has(a.slice(2).split('=')[0])) {
+      const [k, v] = a.slice(2).split(/=(.*)/s) as [string, string | undefined]
+      r.opts[k] = convert(v ?? next(), known.get(k)!.type ?? 'any', '--' + k)
+    } else if (a === '-t' || a === '--tab') r.own.tab = next()
     else if (a === '--browser') r.own.browser = next()
     else if (a === '--field') r.own.field = next()
     else if (a === '--concurrency') r.own.concurrency = Number(next())
@@ -162,7 +166,8 @@ export async function runCall(argv: string[]) {
     L.push('管道：第一个参数写 - 就从 stdin 一行一条读，JSON 记录默认取 url 字段（--field 指定别的），--concurrency N 并发')
     return console.log(L.join('\n'))
   }
-  for (const k of Object.keys(a.opts)) if (RESERVED.has(k)) throw new BxError('BAD_ARGS', `--${k} 是 bx call 自己的选项`)
+  const declared = new Set((f.params.find(p => p.options)?.options || []).map(o => o.name))
+  for (const k of Object.keys(a.opts)) if (RESERVED.has(k) && !declared.has(k)) throw new BxError('BAD_ARGS', `--${k} 是 bx call 自己的选项`)
 
   const bx = createBx({ tab: a.own.tab || process.env.BX_TAB, browser: a.own.browser })
   ;(globalThis as any).bx = bx
@@ -242,17 +247,32 @@ export function libList(domain: string | undefined, fmt: Format) {
   const libs = listLibs().map(e => {
     try {
       const i = libInfo(e)
-      return { domain: e.domain, scope: e.scope, functions: i.functions.map(f => f.name), file: e.file }
+      const site = i.login?.level || 'none'
+      return {
+        domain: e.domain,
+        scope: e.scope,
+        login: site,
+        functions: i.functions.map(f => f.name),
+        /** 和站点默认值不一样的函数 */
+        loginFns: Object.fromEntries(i.functions.filter(f => fnLogin(i, f).level !== site).map(f => [f.name, fnLogin(i, f).level])),
+        file: e.file,
+      }
     } catch (err: any) {
-      return { domain: e.domain, scope: e.scope, functions: [], file: e.file, error: err.message }
+      return { domain: e.domain, scope: e.scope, login: 'none', functions: [], loginFns: {}, file: e.file, error: err.message }
     }
   })
   if (fmt !== 'text') return libs
   if (!libs.length) return '还没有函数库。写法见仓库 docs/lib.md，放到 ~/.bx/lib/<域名>.js'
   const w = Math.max(...libs.map(l => l.domain.length)) + 2
+  const tag: Record<string, string> = { required: '[要登录]  ', optional: '[登录更好]', none: '          ' }
+  const mark: Record<string, string> = { required: '（要登录）', optional: '（登录更好）', none: '（不用登录）' }
   return [
-    ...libs.map(l => `${l.domain.padEnd(w)}${l.functions.join(' ')}${l.scope !== 'builtin' ? `   （${l.scope}）` : ''}${(l as any).error ? `   ⚠ ${(l as any).error}` : ''}`),
+    ...libs.map(
+      l =>
+        `${l.domain.padEnd(w)}${tag[l.login]} ${l.functions.map(f => (l.loginFns as any)[f] ? f + mark[(l.loginFns as any)[f]] : f).join(' ')}${l.scope !== 'builtin' ? `   （${l.scope}）` : ''}${(l as any).error ? `   ⚠ ${(l as any).error}` : ''}`,
+    ),
     '',
+    '[要登录] 没登录会报 NEED_LOGIN；[登录更好] 不登录也能用但会受限。调研前可以先请用户在浏览器里登录这些网站',
     '详细用法（签名、说明、例子、站点笔记）：bx lib list <域名>',
   ].join('\n')
 }
