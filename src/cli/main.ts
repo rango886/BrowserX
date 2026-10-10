@@ -7,6 +7,7 @@ import { BxError, sleep } from '../common/util.ts'
 import { render, type Format } from './output.ts'
 import { runCode } from './run.ts'
 import { runCall, libList } from './call.ts'
+import { libTest, testSummary } from './libtest.ts'
 import { createBx } from '../sdk/index.ts'
 import { digestTrace, showRequest, findInTrace } from '../trace/digest.ts'
 
@@ -410,6 +411,23 @@ const COMMANDS: Record<string, Cmd> = {
     run: async (p, o) => libList(p[0], (o.output as Format) || (process.env.BX_FORMAT as Format) || 'text'),
   },
   'lib show': { args: '<域名>', summary: '同 bx lib list <域名>', run: async (p, o) => libList(p[0] || '', (o.output as Format) || (process.env.BX_FORMAT as Format) || 'text') },
+  'lib test': {
+    args: '<域名> [函数...]',
+    summary: '把函数库里的 @example 当测试跑，按错误码分类：真坏了 / 要登录 / 被拦 / 例子过期；改完函数库用它验证',
+    opts: {
+      all: { type: 'boolean', desc: '测全部函数库（很慢，容易触发风控）' },
+      dry: { type: 'boolean', desc: '只列出会跑哪些、跳过哪些，不真的跑' },
+      clean: { type: 'boolean', desc: '跑完删掉临时目录（默认留着，方便看下载的文件）' },
+      timeout: { type: 'string', desc: '每条例子最多等几秒（默认 300）' },
+      delay: { type: 'string', desc: '同一个网站两条例子之间停几毫秒（默认 1000）' },
+      browser: { type: 'string', desc: '在哪个浏览器里开标签' },
+    },
+    run: async (p, o) => {
+      const r = await libTest(p[0], p.slice(1), { all: o.all, dry: o.dry, clean: o.clean, timeout: num(o.timeout), delay: num(o.delay) ?? 1000, tab: o.tab, browser: o.browser })
+      const fmt = (o.output as Format) || (process.env.BX_FORMAT as Format) || 'text'
+      return fmt === 'text' ? testSummary(r, o.dry) : r
+    },
+  },
   cdp: {
     args: '<method> [json]',
     summary: '直接发 CDP 命令（逃生通道）',
@@ -457,7 +475,7 @@ const GROUPS: [string, string[]][] = [
   ['看页面', ['read', 'snapshot', 'find', 'shot', 'eval', 'console', 'dialogs', 'cookies']],
   ['操作页面', ['goto', 'back', 'forward', 'reload', 'click', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'hover', 'scroll', 'upload', 'drag', 'wait']],
   ['按坐标 / 按住键', ['mouse click', 'mouse move', 'mouse down', 'mouse up', 'mouse wheel', 'mouse drag', 'key down', 'key up']],
-  ['函数库 / 脚本', ['run', 'call', 'lib list']],
+  ['函数库 / 脚本', ['run', 'call', 'lib list', 'lib test']],
   ['注入 / 网络', ['inject add', 'inject list', 'inject rm', 'net log', 'net show', 'net wait', 'net clear', 'net route add', 'net route list', 'net route rm']],
   ['录制', ['trace start', 'trace mark', 'trace add', 'trace status', 'trace stop', 'trace list', 'trace digest', 'trace show', 'trace find', 'trace rm']],
   ['其它', ['cdp']],

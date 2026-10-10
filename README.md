@@ -67,7 +67,7 @@ bx browser launch ci --headless
 | 看页面 | `read [网址]`、`snapshot`、`find`、`shot`、`eval`、`console`、`dialogs`、`cookies` |
 | 操作 | `goto back forward reload click fill type press select check uncheck hover scroll upload drag wait` |
 | 按坐标 / 按住键 | `mouse click / move / down / up / wheel / drag`、`key down / up` |
-| 函数库 / 脚本 | `run`、`call`、`lib list` |
+| 函数库 / 脚本 | `run`、`call`、`lib list`、`lib test` |
 | 注入 / 网络 | `inject add / list / rm`、`net log / show / wait / clear`、`net route add / list / rm` |
 | 录制 | `trace start / mark / add / stop / list / digest / show / find / rm` |
 | 其它 | `cdp <method> [json]`（直接发 CDP，逃生通道） |
@@ -121,6 +121,7 @@ export async function read(tab) { … }
 ```bash
 bx lib list                                   # 有哪些
 bx lib list bilibili.com                      # 签名、说明、例子、站点笔记
+bx lib test bilibili.com                      # 把 @example 真跑一遍，看哪些坏了
 bx call bilibili.com comments BV1xx --limit 20
 bx call bilibili.com rank 知识 --limit 10 | bx call bilibili.com video - -o csv > 知识区.csv
 ```
@@ -168,7 +169,7 @@ bx trace stop                                   # 自动生成调查报告
 
 ```
 bin/bx.js               入口
-src/cli/                命令解析、输出格式、bx run（run.ts）、bx call / lib list（call.ts）
+src/cli/                命令解析、输出格式、bx run（run.ts）、bx call / lib list（call.ts）、lib test（libtest.ts）
 src/sdk/                全局 bx 对象和 Tab 类（index.ts）、函数库加载和签名解析（lib.ts）
 src/daemon/             daemon：注册表、会话、snapshot、元素定位（locate.ts）、操作、read
 src/daemon/drivers/     插件驱动 / CDP 驱动

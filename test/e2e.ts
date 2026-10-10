@@ -314,6 +314,43 @@ export async function read(tab) {
     )
   })
 
+  await test('bx lib test：跑 @example，@test file / @test skip，按错误码分类', () => {
+    fs.writeFileSync(
+      path.join(PROJ, '.bx', 'lib', 'libtest.local.js'),
+      `import fs from 'node:fs'
+/** 读测试前写好的文件
+ *  @example note('note.txt')
+ *  @test file note.txt 第一行\\n第二行 */
+export async function note(f) { return fs.readFileSync(f, 'utf8').split('\\n') }
+/** @example gone('x') */
+export async function gone(id) { throw new BxError('NOT_FOUND', '没有 ' + id) }
+/** @example nothing() */
+export async function nothing() { return [] }
+/** @example danger()
+ *  @test skip 会删东西 */
+export async function danger() { throw new Error('不该跑') }
+`,
+    )
+    let out = ''
+    try {
+      bxIn(PROJ, ['lib', 'test', 'libtest.local', '--delay', '0', '-o', 'json'])
+      assert.fail('有真失败时退出码应该不是 0')
+    } catch (e: any) {
+      out = String(e.stdout)
+    }
+    const r = JSON.parse(out)
+    const by = Object.fromEntries(r.results.map((x: any) => [x.fn, x]))
+    assert.equal(by.note.status, 'ok')
+    assert.match(by.note.note, /2 项/)
+    assert.equal(by.gone.status, 'stale')
+    assert.equal(by.nothing.status, 'fail')
+    assert.equal(by.nothing.code, 'EMPTY')
+    assert.equal(by.danger.status, 'skip')
+    assert.equal(fs.readFileSync(path.join(r.dir, 'libtest.local', 'note.txt'), 'utf8'), '第一行\n第二行')
+    assert.equal(JSON.parse(bxIn(PROJ, ['lib', 'test', 'libtest.local', 'note', '-o', 'json'])).results.length, 1)
+    assert.match(bxIn(PROJ, ['lib', 'list', 'libtest.local']), /bx lib test 不跑这个函数的例子：会删东西/)
+  })
+
   await test('bx read <网址>：用函数库的 read，末尾列出函数，读完关掉标签', () => {
     const before = json('tab', 'list').length
     const r = JSON.parse(bxIn(PROJ, ['read', `${U}/list`, '-o', 'json']))

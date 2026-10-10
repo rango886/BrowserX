@@ -48,7 +48,7 @@ await tab.read({ grep: /断货|限购/ })                    // 只要命中的�
 
 ```js
 await tab.goto(url)              await tab.back()              await tab.reload()
-await tab.click("getByRole('button', { name: '提交' })")       // 目标的写法见第 5 节
+await tab.click("getByRole('button', { name: '提交' })")       // 目标的写法见第 6 节
 await tab.fill('#q', '关键词', { submit: true })
 await tab.fill({ 'input[name=user]': '张三', "getByLabel('同意协议')": true })  // 一次填多个
 await tab.press('Control+A')     await tab.type('文字')        await tab.select('#city', '北京')
@@ -140,7 +140,7 @@ export async function read(tab, { section } = {}) {
 
 - **参数就是普通参数**，不用另外声明。命令行调用时，位置参数按顺序传，`--limit 20` 这类合成最后一个对象参数。
 - **参数类型看默认值**：`limit = 20` 是数字，`full = false` 是开关（`--full`），没有默认值的是字符串。命令行按这个转换类型，帮助信息也从这里生成。
-- **函数前面的 `/** */`**：第一行是说明，`@example` 是用法示例，`bx lib list` 会显示出来。
+- **函数前面的 `/** */`**：第一行是说明，`@example` 是用法示例，`bx lib list` 会显示出来，`bx lib test` 会真的执行它（见下面“测试”一节），所以要写真实、能跑通的参数。
 - **要不要登录用 `@login` 标出来**（见下一节）。
 - **文件顶部的注释是站点笔记**：接口在哪、字段什么意思、有什么坑。下次来修或者加函数时先看它。
 - **返回数组**（每项一个对象，带上能给下一个命令用的 `url` / `id`），这样 `bx call` 输出 JSONL 能接管道。
@@ -220,7 +220,52 @@ const list = await bx.lib('bilibili.com').search('纪录片', { limit: 5 })
 
 `bx call` 的管道：第一个参数写 `-` 就从 stdin 一行一条地读，结果输出 JSONL。读进来的是 JSON 记录时，默认取它的 `url` 字段当参数（`--field mid` 指定别的字段，支持 `a.b` 路径）；纯文本就整行当参数。`--concurrency 3` 并发；某条失败只在 stderr 打 `✗`，其余继续，退出码 3。
 
-## 5. 目标元素的写法
+## 5. 测试：把 @example 真跑一遍
+
+网站一改版，函数库就会悄悄坏掉。`bx lib test` 会把每个函数的 `@example` 当成测试来跑，写完或者修完一个函数后用它验证：
+
+```bash
+bx lib test bilibili.com             # 跑这个站的全部例子
+bx lib test bilibili.com comments    # 只跑某几个函数
+bx lib test bilibili.com --dry       # 只列出会跑哪些、跳过哪些
+bx lib test --all                    # 所有站点，很慢，也容易触发风控
+```
+
+它是这样跑的：
+
+1. 建一个临时目录 `~/.bx/test/<时间>/<域名>/`，把当前目录切过去。例子里的相对路径（读 `prompt.txt`、下载到 `./videos`）都落在这里，不会弄乱你的项目目录。跑完默认留着，`--clean` 删掉
+2. 如果函数注释里写了 `@test file`，就先把这些文件写进临时目录
+3. 把例子当表达式执行（比如 `search('x', { limit: 5 })`），模块导出的函数都能直接用，全局有 `bx`。每条跑完关掉它自己开的标签
+4. 同一个站按顺序跑，两条之间停 1 秒（`--delay` 改），每条最多 300 秒（`--timeout` 改）
+
+结果按错误码分类，只有最后一类算失败（退出码 1）：
+
+| 标记 | 什么情况 |
+|---|---|
+| `✓` | 正常返回，而且结果不是空的。后面会显示条数和第一条有哪些字段 |
+| `要登录` | `NEED_LOGIN`。如果函数没标 `@login`，会提醒你补上 |
+| `被拦` | `BLOCKED`，验证码或者限流，是环境的问题 |
+| `例子过期` | `NOT_FOUND`，例子里的视频或帖子可能被删了，要换个参数 |
+| `跳过` | 函数标了 `@test skip` |
+| `✗` | 其他情况：报错、`CHANGED`、结果是空的（`EMPTY`），这些是真的要修 |
+
+函数注释里可以用 `@test` 控制怎么测，它对这个函数的所有例子都生效：
+
+```js
+/** 发送 prompt，返回回复
+ *  @example ask('', { file: 'prompt.txt' })
+ *  @test file prompt.txt 用一句话介绍你自己     ← 跑之前写这个文件（内容写到行尾，\n 表示换行）
+ */
+
+/** 发一条微博
+ *  @example post('测试')
+ *  @test skip 会真的发出去                        ← 不跑这个函数的例子，后面写原因
+ */
+```
+
+下载文件、少量消耗额度这种副作用不用跳过；会发帖、删除东西、改账号设置这种**动了别人能看到的东西**的，一定要加 `@test skip`。
+
+## 6. 目标元素的写法
 
 所有点击、填写类的操作（命令行和 `tab` 方法都一样）接受四种写法：
 
@@ -237,12 +282,13 @@ bx click "getByText('下一步')"                   # 还有 getByPlaceholder('�
 - **函数库里不要用编号**：页面一变编号就变了，用 CSS 或 getBy*。
 - 编号失效了会自动重新找：snapshot 时给每个编号记下“角色 + 名字 + 第几个同名元素”，页面局部重绘（React 刷新、弹层重建）后原来的元素没了，就按这三样再找一次，结果里注明“重新定位过”。页面跳转后编号全部作废，要重新 snapshot。
 
-## 6. 一个网站从陌生到熟悉
+## 7. 一个网站从陌生到熟悉
 
 ```
 第一次遇到 → bx read <网址> 看一眼
 不够用     → bx run 里试：bx.open、tab.eval 看页面数据、bx net log 找接口、tab.fetch 调一下
 试通了     → 把这段代码改成函数，存进 ~/.bx/lib/<域名>.js，顶部写上站点笔记
+写完       → bx lib test <域名>，把 @example 跑一遍
 以后       → bx call 或 bx.lib(域名).函数()；bx read 的输出也会提示有这些函数
 ```
 

@@ -231,6 +231,7 @@ bx run -f step3.js
 第一次遇到 → bx read <网址> 看一眼
 不够用     → bx run 里试：tab.eval 看页面数据、bx net log --api -t t5 找接口、tab.fetch 调一下
 试通了     → 改成函数，存进 ~/.bx/lib/<域名>.js
+写完 / 修完 → bx lib test <域名> [函数]，把 @example 真跑一遍验证
 ```
 
 ```js
@@ -254,6 +255,7 @@ export async function read(tab) { … }
 
 - 参数类型看默认值（`limit = 20` 是数字，`full = false` 是开关），不用另外声明；全局有 `bx` 和 `BxError`，不用 import。
 - 标了 `@login` 的函数要自己认出“没登录”（返回 200 但 JSON 里带错误码、跳到登录页、只给前几条）并抛 `NEED_LOGIN`，框架只认得 401 / 403。
+- `@example` 会被 `bx lib test` 真的执行：要写真实、能跑通的参数；需要文件就加 `@test file 文件名 内容`，不能自动跑（发帖、删东西）就加 `@test skip 原因`。`bx lib test` 只有“真坏了”才算失败，要登录 / 被拦 / 例子过期单独列出。
 - 函数库里定位元素用 CSS 或 `getByRole(...)`，不要用编号（页面一变编号就变）；自己开的标签在 `finally` 里关掉。
 - 动手之前先看看 [OpenCLI](https://github.com/jackwener/opencli) 的 `clis/<站点>/` 有没有现成实现：它的 `page.goto` / `page.evaluate` 对应 `tab.goto` / `tab.eval`。
 - 详细写法见仓库里的 `docs/lib.md`。想录下一次操作、自动分析数据来自哪个接口：`bx trace start --goal "…"` … `bx trace stop`，见 `docs/trace.md`。

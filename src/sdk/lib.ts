@@ -97,6 +97,17 @@ export interface LibFn {
   generator?: boolean
   /** 函数自己写的 @login；没写时看站点的 */
   login?: LoginInfo
+  /** @test：bx lib test 怎么跑这个函数的例子 */
+  test?: LibTest
+}
+
+/**
+ * @test skip 原因              不跑这个函数的例子
+ * @test file <文件名> <内容>    跑之前在临时目录里写这个文件（内容到行尾，\n 表示换行）
+ */
+export interface LibTest {
+  skip?: string
+  files: { name: string; content: string }[]
 }
 
 export interface LibInfo extends LibEntry {
@@ -276,11 +287,20 @@ function parseDoc(doc: string) {
   const desc: string[] = []
   const examples: string[] = []
   let login: LoginInfo | undefined
+  let test: LibTest | undefined
   let inEx = false
   for (const l of lines) {
     const m = l.match(/^\s*@(\w+)\s*(.*)$/)
     if (m) {
       if (m[1] === 'login') login = parseLogin(m[2]) || login
+      if (m[1] === 'test') {
+        test ||= { files: [] }
+        const t = m[2].trim()
+        const skip = t.match(/^skip\b\s*(.*)$/s)
+        const file = t.match(/^file\s+(\S+)\s?(.*)$/s)
+        if (skip) test.skip = skip[1].trim() || '（没写原因）'
+        else if (file) test.files.push({ name: file[1], content: file[2].replace(/\\n/g, '\n') })
+      }
       inEx = m[1] === 'example'
       if (inEx && m[2].trim()) examples.push(m[2].trim())
       continue
@@ -290,7 +310,7 @@ function parseDoc(doc: string) {
     } else desc.push(l)
   }
   const d = desc.join('\n').trim()
-  return { desc: d, summary: d.split('\n')[0] || '', examples, ...(login ? { login } : {}) }
+  return { desc: d, summary: d.split('\n')[0] || '', examples, ...(login ? { login } : {}), ...(test ? { test } : {}) }
 }
 
 export function parseLibSource(src: string): { notes: string; login?: LoginInfo; functions: LibFn[] } {
@@ -353,6 +373,7 @@ export function describeLib(info: LibInfo, opts: { notes?: boolean } = {}) {
     if (f.desc) L.push(...f.desc.split('\n').map(l => '      ' + l))
     if (f.login && (f.login.level !== site.level || f.login.note)) L.push(`      登录：${LOGIN_LABEL[f.login.level]}${f.login.note ? ' — ' + f.login.note : ''}`)
     for (const e of f.examples) L.push(`      例：${e}`)
+    if (f.test?.skip && f.examples.length) L.push(`      （bx lib test 不跑这个函数的例子：${f.test.skip}）`)
     if (f.name !== 'read') L.push(`      命令行：${cliUsage(info.domain, f)}`)
     else L.push('      （bx read 打开这个域名的网址时会先用它）')
   }
